@@ -37,7 +37,7 @@ def test_agent_normal_isolation_contract():
 
 def test_steering_module_is_observe_only():
     source = (
-        ROOT / "OpenRA" / "OpenRA.Mods.Common" / "Traits" / "Player" / "Phase1a" / "SteeringModule.cs"
+        ROOT / "OpenRA" / "OpenRA.Mods.Common" / "Traits" / "Player" / "Commander" / "SteeringModule.cs"
     ).read_text(encoding="utf-8")
     assert "QueueOrder" not in source
     assert "IssueOrder" not in source
@@ -49,7 +49,7 @@ def test_python_sources_parse():
         ROOT / "openra_env" / "server" / "bridge_client.py",
         ROOT / "openra_env" / "server" / "openra_environment.py",
         ROOT / "openra_env" / "server" / "openra_process.py",
-        ROOT / "phase1a" / "scripts" / "phase1a_regression.py",
-        ROOT / "phase1a" / "scripts" / "phase1a_baseline.py",
+        ROOT / "commander" / "scripts" / "regression.py",
+        ROOT / "commander" / "scripts" / "baseline.py",
     ):
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
