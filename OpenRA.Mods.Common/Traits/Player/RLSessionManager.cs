@@ -16,6 +16,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using OpenRA.Mods.Common.Traits.Commander;
 using OpenRA.Network;
 using OpenRA.Primitives;
 using OpenRA.Support;

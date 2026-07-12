@@ -14,7 +14,7 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using RLProto = OpenRA.Mods.Common.RL;
 
-namespace OpenRA.Mods.Common.Traits
+namespace OpenRA.Mods.Common.Traits.Commander
 {
 	/// <summary>
 	/// Read-only observation endpoint for one game session.  The game thread is

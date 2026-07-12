@@ -11,7 +11,7 @@
 
 using OpenRA.Traits;
 
-namespace OpenRA.Mods.Common.Traits
+namespace OpenRA.Mods.Common.Traits.Commander
 {
 	/// <summary>
 	/// Phase 1 steering boundary. It deliberately issues no orders: normal

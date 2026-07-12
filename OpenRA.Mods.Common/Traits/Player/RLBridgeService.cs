@@ -15,6 +15,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Grpc.Core;
+using OpenRA.Mods.Common.Traits.Commander;
 using RLProto = OpenRA.Mods.Common.RL;
 
 namespace OpenRA.Mods.Common.Traits

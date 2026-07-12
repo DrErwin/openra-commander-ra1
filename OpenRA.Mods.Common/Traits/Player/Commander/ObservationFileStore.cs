@@ -17,7 +17,7 @@ using System.Threading;
 using Google.Protobuf;
 using RLProto = OpenRA.Mods.Common.RL;
 
-namespace OpenRA.Mods.Common.Traits
+namespace OpenRA.Mods.Common.Traits.Commander
 {
 	/// <summary>
 	/// A1.5 latest-snapshot publisher. Each file is replaced atomically and the

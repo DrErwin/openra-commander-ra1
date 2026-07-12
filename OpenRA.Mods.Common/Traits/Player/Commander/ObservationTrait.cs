@@ -15,7 +15,7 @@ using System.Threading.Channels;
 using OpenRA.Traits;
 using RLProto = OpenRA.Mods.Common.RL;
 
-namespace OpenRA.Mods.Common.Traits
+namespace OpenRA.Mods.Common.Traits.Commander
 {
 	[TraitLocation(SystemActors.Player)]
 	public sealed class ObservationTraitInfo : ConditionalTraitInfo

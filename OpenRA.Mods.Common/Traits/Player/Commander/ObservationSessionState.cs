@@ -12,7 +12,7 @@
 using System.Linq;
 using RLProto = OpenRA.Mods.Common.RL;
 
-namespace OpenRA.Mods.Common.Traits
+namespace OpenRA.Mods.Common.Traits.Commander
 {
 	static class ObservationSessionState
 	{
