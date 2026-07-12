@@ -56,6 +56,7 @@ _daemon = OpenRAProcessManager(OpenRAConfig(
     multi_session=True,
     openra_path=_openra_path,
     record_replays=_env_flag("RECORD_REPLAYS", False),
+    observation_dir=os.environ.get("RL_OBSERVATION_DIR", ""),
 ))
 
 # Per-session gRPC channels: each environment creates its own channel.

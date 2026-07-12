@@ -17,3 +17,8 @@ venv/
 replays/
 documents/
 *.orarep
+# Phase 1a local runtime and daemon logs are reproducible test outputs.
+/phase1a/runtime/
+/phase1a/evidence/*.log
+/phase1a/evidence/*.err
+/phase1a/**/__pycache__/

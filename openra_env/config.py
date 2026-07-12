@@ -30,6 +30,13 @@ class GameConfig(BaseModel):
     headless: bool = True
     record_replays: bool = False
     seed: Optional[int] = None
+    # Phase 1 canonical profile inputs. Empty/zero retains the legacy launcher behavior.
+    rl_bot_type: str = "rl-agent"
+    player_faction: str = ""
+    enemy_faction: str = ""
+    player_spawn: int = 0
+    enemy_spawn: int = 0
+    observation_dir: str = ""
     max_ticks: int = 0  # 0 = unlimited
     max_wall_time_s: int = 0  # 0 = unlimited
 
@@ -399,6 +406,7 @@ _ENV_VAR_MAP: list[tuple[str, str]] = [
     # game
     ("OPENRA_PATH", "game.openra_path"),
     ("RECORD_REPLAYS", "game.record_replays"),
+    ("RL_OBSERVATION_DIR", "game.observation_dir"),
     # opponent
     ("BOT_TYPE", "opponent.bot_type"),
     ("AI_SLOT", "opponent.ai_slot"),

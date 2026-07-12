@@ -53,9 +53,18 @@ class OpenRAConfig:
     grpc_port: int = 9999
     bot_name: str = "Beginner AI"
     bot_type: str = "beginner"
+    # `agent-normal` provides autonomous normal AI plus read-only steering/observation.
+    rl_bot_type: str = "rl-agent"
     rl_slot: str = "Multi1"
     ai_slot: str = "Multi0"
     seed: Optional[int] = None
+    # Applied by CreateSession in multi-session mode. The stock single-session
+    # launcher does not expose faction/spawn and intentionally remains unchanged.
+    player_faction: str = ""
+    enemy_faction: str = ""
+    player_spawn: int = 0
+    enemy_spawn: int = 0
+    observation_dir: str = ""
     headless: bool = True  # Use Null renderer (no GPU needed)
     record_replays: bool = False  # Enable .orarep replay recording
     multi_session: bool = False  # Multi-session daemon mode
@@ -95,6 +104,8 @@ class OpenRAProcessManager:
         env.setdefault("DOTNET_ROLL_FORWARD", "LatestMajor")
         # Pass gRPC port so each OpenRA process binds a unique port
         env["RL_GRPC_PORT"] = str(self.config.grpc_port)
+        if self.config.observation_dir:
+            env["RL_OBSERVATION_DIR"] = self.config.observation_dir
 
         self._process = subprocess.Popen(
             cmd,
@@ -191,7 +202,7 @@ class OpenRAProcessManager:
         else:
             # Single-session mode: start a specific map with bots
             # Build bots configuration: slot:bottype,slot:bottype
-            bots = f"{self.config.rl_slot}:rl-agent"
+            bots = f"{self.config.rl_slot}:{self.config.rl_bot_type}"
             if self.config.ai_slot:
                 # Map difficulty tiers to OpenRA bot types
                 actual_type = BOT_TYPE_MAP.get(self.config.bot_type, self.config.bot_type)

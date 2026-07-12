@@ -256,10 +256,16 @@ class OpenRAEnvironment(MCPEnvironment):
             map_name=cfg.game.map_name,
             grpc_port=cfg.game.grpc_port,
             bot_type=cfg.opponent.bot_type,
+            rl_bot_type=cfg.game.rl_bot_type,
             ai_slot=cfg.opponent.ai_slot,
             record_replays=cfg.game.record_replays,
             headless=cfg.game.headless,
             seed=cfg.game.seed,
+            player_faction=cfg.game.player_faction,
+            enemy_faction=cfg.game.enemy_faction,
+            player_spawn=cfg.game.player_spawn,
+            enemy_spawn=cfg.game.enemy_spawn,
+            observation_dir=cfg.game.observation_dir,
         )
         if not multi_session:
             self._process = OpenRAProcessManager(self._config)
@@ -268,6 +274,7 @@ class OpenRAEnvironment(MCPEnvironment):
         self._bridge = BridgeClient(
             port=cfg.game.grpc_port,
             shared_channel=shared_channel,
+            observation_dir=cfg.game.observation_dir,
         )
         rw = RewardWeights(
             survival=cfg.reward.survival,
@@ -3088,11 +3095,15 @@ class OpenRAEnvironment(MCPEnvironment):
             # Using invalid types leaves the slot empty → no enemy actors.
             if not actual_bot_type:
                 actual_bot_type = "dummy"
-            bots = f"Multi1:rl-agent,{self._config.ai_slot}:{actual_bot_type}"
+            bots = f"{self._config.rl_slot}:{self._config.rl_bot_type},{self._config.ai_slot}:{actual_bot_type}"
             session_id = self._bridge.create_session(
                 map_name=self._config.map_name,
                 bots=bots,
                 seed=self._config.seed or 0,
+                player_faction=self._config.player_faction,
+                enemy_faction=self._config.enemy_faction,
+                player_spawn=self._config.player_spawn,
+                enemy_spawn=self._config.enemy_spawn,
             )
             logger.info(f"Session created: {session_id}")
 

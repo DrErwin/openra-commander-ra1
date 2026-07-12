@@ -11,15 +11,40 @@ Protocol:
 """
 
 import base64
+import json
 import logging
+import os
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import grpc
+from google.protobuf.json_format import ParseDict, ParseError
+from google.protobuf.message import DecodeError
 
 from openra_env.generated import rl_bridge_pb2, rl_bridge_pb2_grpc
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ObservationReadResult:
+    """Latest observation read from the A1.5 file fallback."""
+
+    observation: rl_bridge_pb2.GameObservation
+    sequence: int
+    observed_at_unix_ms: int
+    stale: bool
+    source: str
+
+
+class ObservationFallbackError(RuntimeError):
+    """Structured error raised while reading a fallback snapshot."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 class BridgeClient:
@@ -33,11 +58,13 @@ class BridgeClient:
     """
 
     def __init__(self, host: str = "localhost", port: int = 9999, timeout_s: float = 30.0,
-                 session_id: str = "", shared_channel: Optional[grpc.Channel] = None):
+                 session_id: str = "", shared_channel: Optional[grpc.Channel] = None,
+                 observation_dir: Optional[str] = None):
         self.host = host
         self.port = port
         self.timeout_s = timeout_s
         self.session_id = session_id
+        self.observation_dir = observation_dir or os.environ.get("RL_OBSERVATION_DIR", "")
         self._shared_channel = shared_channel
         self._channel: Optional[grpc.Channel] = None
         self._stub: Optional[rl_bridge_pb2_grpc.RLBridgeStub] = None
@@ -73,6 +100,8 @@ class BridgeClient:
                 if state.phase == "playing":
                     logger.info(f"Bridge ready after {attempt + 1} attempts, phase={state.phase}")
                     return True
+                if state.phase == "error":
+                    raise RuntimeError(f"OpenRA session failed: {state.error_code}: {state.error_message}")
                 logger.debug(f"Bridge not ready (attempt {attempt + 1}), phase={state.phase}")
                 time.sleep(retry_interval)
                 continue
@@ -83,6 +112,8 @@ class BridgeClient:
                 else:
                     logger.error(f"Bridge failed to become ready after {max_retries} attempts")
                     return False
+            except RuntimeError:
+                raise
             except Exception as e:
                 if attempt < max_retries - 1:
                     logger.debug(f"Connection attempt {attempt + 1} failed: {e}")
@@ -90,6 +121,84 @@ class BridgeClient:
                 else:
                     return False
         return False
+
+    def read_latest_observation(
+        self,
+        session_id: str = "",
+        cursor: Optional[int] = None,
+        max_age_ms: int = 2000,
+        retries: int = 3,
+    ) -> ObservationReadResult | None:
+        """Read the atomically published A1.5 snapshot.
+
+        The protobuf file is preferred. The JSON envelope is used to validate
+        session/sequence and can reconstruct an observation if the protobuf
+        file is temporarily unavailable.
+        """
+        sid = session_id or self.session_id
+        if not sid:
+            raise ObservationFallbackError("session_mismatch", "session_id is required")
+        if Path(sid).name != sid or sid in {".", ".."}:
+            raise ObservationFallbackError("session_mismatch", "invalid session_id")
+
+        if self.observation_dir:
+            root = Path(self.observation_dir)
+        elif os.name == "nt":
+            root = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "OpenRA" / "RLBridge" / "runtime"
+        else:
+            root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "openra" / "RLBridge" / "runtime"
+        session_dir = root / sid
+        json_path = session_dir / "latest-observation.json"
+        protobuf_path = session_dir / "latest-observation.pb"
+
+        last_error: Exception | None = None
+        for _ in range(max(1, retries)):
+            try:
+                envelope = json.loads(json_path.read_text(encoding="utf-8"))
+                if envelope.get("schema_version") != "1":
+                    raise ObservationFallbackError("schema_mismatch", "unsupported observation schema_version")
+                if envelope.get("session_id") != sid:
+                    raise ObservationFallbackError("session_mismatch", "fallback snapshot belongs to another session")
+
+                sequence = int(envelope["observation_sequence"])
+                observed_at = int(envelope["observed_at_unix_ms"])
+                if cursor is not None and sequence < cursor:
+                    raise ObservationFallbackError("cursor_expired", "fallback cursor is newer than the retained snapshot")
+                if cursor is not None and sequence == cursor:
+                    return None
+                if cursor not in (None, 0) and sequence > cursor + 1:
+                    raise ObservationFallbackError("cursor_expired", "intermediate snapshots are no longer retained")
+
+                observation = rl_bridge_pb2.GameObservation()
+                source = "file.pb"
+                try:
+                    observation.ParseFromString(protobuf_path.read_bytes())
+                except (FileNotFoundError, DecodeError, ValueError):
+                    ParseDict(envelope["observation"], observation)
+                    source = "file.json"
+
+                if observation.episode_id != sid or observation.observation_sequence != sequence:
+                    continue
+
+                age_ms = max(0, int(time.time() * 1000) - observed_at)
+                return ObservationReadResult(
+                    observation=observation,
+                    sequence=sequence,
+                    observed_at_unix_ms=observed_at,
+                    stale=age_ms > max_age_ms,
+                    source=source,
+                )
+            except ObservationFallbackError:
+                raise
+            except FileNotFoundError as exc:
+                last_error = exc
+                time.sleep(0.02)
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError, ParseError) as exc:
+                time.sleep(0.02)
+                last_error = exc
+        if isinstance(last_error, FileNotFoundError):
+            raise ObservationFallbackError("unavailable", f"fallback snapshot not found for session {sid}")
+        raise ObservationFallbackError("inconsistent_snapshot", f"could not read a consistent snapshot: {last_error}")
 
     @property
     def session_started(self) -> bool:
@@ -135,7 +244,11 @@ class BridgeClient:
         request = rl_bridge_pb2.StateRequest(session_id=self.session_id)
         return self._stub.GetState(request, timeout=self.timeout_s)
 
-    def create_session(self, map_name: str, bots: str, seed: int = 0) -> str:
+    def create_session(
+        self, map_name: str, bots: str, seed: int = 0,
+        player_faction: str = "", enemy_faction: str = "",
+        player_spawn: int = 0, enemy_spawn: int = 0,
+    ) -> str:
         """Create a new game session (multi-session mode).
 
         Returns the session_id assigned by the server.
@@ -147,6 +260,10 @@ class BridgeClient:
             map_name=map_name,
             bots=bots,
             seed=seed,
+            player_faction=player_faction,
+            enemy_faction=enemy_faction,
+            player_spawn=player_spawn,
+            enemy_spawn=enemy_spawn,
         )
         response = self._stub.CreateSession(request, timeout=300.0, wait_for_ready=True)
         self.session_id = response.session_id
