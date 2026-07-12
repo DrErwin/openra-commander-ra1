@@ -20,6 +20,7 @@ using OpenRA.Network;
 using OpenRA.Primitives;
 using OpenRA.Support;
 using OpenRA.Traits;
+using RLProto = OpenRA.Mods.Common.RL;
 
 namespace OpenRA.Mods.Common.Traits
 {
@@ -32,6 +33,9 @@ namespace OpenRA.Mods.Common.Traits
 	/// </summary>
 	public static class RLSessionManager
 	{
+		public static bool IsMultiSessionMode => ObservationSessionRegistry.MultiSessionMode;
+		const int CleanupPeriodMilliseconds = 5000;
+
 		static ModData modData;
 		static readonly object MapCacheLock = new();
 		static readonly object WorldCreateLock = new();
@@ -39,8 +43,26 @@ namespace OpenRA.Mods.Common.Traits
 
 		/// <summary>Cache resolved MapPreview by map name to avoid repeated MapCache enumeration.</summary>
 		static readonly ConcurrentDictionary<string, MapPreview> ResolvedMaps = new();
+		static readonly ConcurrentDictionary<string, SessionFailure> SessionFailures = new();
+		static TimeSpan idleSessionTtl;
+		static TimeSpan gameOverSessionTtl;
+		static Thread cleanupThread;
+		static bool allowObservationlessSessions;
+		static int testGameOverAfterTicks;
 
 		static int nextClientIndex = 100;
+
+		internal sealed class SessionFailure
+		{
+			public readonly string Code;
+			public readonly string Message;
+
+			public SessionFailure(string code, string message)
+			{
+				Code = code;
+				Message = message;
+			}
+		}
 
 		/// <summary>
 		/// Per-session state needed for ticking.
@@ -49,17 +71,43 @@ namespace OpenRA.Mods.Common.Traits
 		{
 			public readonly OrderManager OrderManager;
 			public readonly World World;
+			public readonly DateTime CreatedUtc = DateTime.UtcNow;
 
 			/// <summary>Prevents two concurrent FastAdvance calls from ticking the same World.</summary>
 			public readonly SemaphoreSlim TickLock = new(1, 1);
 
 			/// <summary>Track in-flight work so DestroySession can wait for it to finish.</summary>
 			public volatile WorkItem ActiveWorkItem;
+			public IObservationSession ObservationSession;
+			public int ContinuousStartTick;
+			public int TestGameOverIssued;
+			readonly CancellationTokenSource continuousCancellation = new();
+			Thread continuousThread;
 
 			public SessionState(OrderManager om, World w)
 			{
 				OrderManager = om;
 				World = w;
+			}
+
+			public void StartContinuous(IObservationSession session)
+			{
+				ObservationSession = session;
+				ContinuousStartTick = World.WorldTick;
+				continuousThread = new Thread(() => ContinuousTickLoop(this, continuousCancellation.Token))
+				{
+					IsBackground = true,
+					Name = $"Agent-Continuous-{session?.SessionId ?? "baseline"}"
+				};
+				continuousThread.Start();
+			}
+
+			public void StopContinuous()
+			{
+				continuousCancellation.Cancel();
+				if (continuousThread != null && continuousThread != Thread.CurrentThread)
+					continuousThread.Join(TimeSpan.FromSeconds(10));
+				continuousCancellation.Dispose();
 			}
 		}
 
@@ -90,7 +138,13 @@ namespace OpenRA.Mods.Common.Traits
 		{
 			modData = md;
 			ExternalBotBridge.MultiSessionMode = true;
+			ObservationSessionRegistry.MultiSessionMode = true;
 			Support.PerfHistory.Disabled = true;
+			idleSessionTtl = ReadTtl("RL_SESSION_IDLE_TTL_SECONDS", 60);
+			gameOverSessionTtl = ReadTtl("RL_SESSION_GAMEOVER_TTL_SECONDS", 30);
+			allowObservationlessSessions = string.Equals(
+				Environment.GetEnvironmentVariable("RL_ALLOW_OBSERVATIONLESS_SESSIONS"), "true", StringComparison.OrdinalIgnoreCase);
+			testGameOverAfterTicks = ReadNonNegativeInt("RL_SESSION_TEST_GAMEOVER_AFTER_TICKS", 0);
 
 			var workerCount = Environment.ProcessorCount;
 			workQueue = new BlockingCollection<WorkItem>(boundedCapacity: workerCount * 4);
@@ -106,7 +160,55 @@ namespace OpenRA.Mods.Common.Traits
 				workers[i].Start();
 			}
 
+			cleanupThread = new Thread(CleanupLoop)
+			{
+				IsBackground = true,
+				Name = "RL-Session-Cleanup"
+			};
+			cleanupThread.Start();
+
 			Log.Write("rl-bridge", $"RLSessionManager initialized: {workerCount} workers, queue capacity {workerCount * 4}");
+		}
+
+		static TimeSpan ReadTtl(string variable, int defaultSeconds)
+		{
+			var value = Environment.GetEnvironmentVariable(variable);
+			if (value != null && int.TryParse(value, out var seconds) && seconds >= 0)
+				return TimeSpan.FromSeconds(seconds);
+
+			return TimeSpan.FromSeconds(defaultSeconds);
+		}
+
+		static int ReadNonNegativeInt(string variable, int defaultValue)
+		{
+			var value = Environment.GetEnvironmentVariable(variable);
+			return value != null && int.TryParse(value, out var parsed) && parsed >= 0 ? parsed : defaultValue;
+		}
+
+		static void CleanupLoop()
+		{
+			while (true)
+			{
+				Thread.Sleep(CleanupPeriodMilliseconds);
+				var now = DateTime.UtcNow;
+				foreach (var pair in SessionStates)
+				{
+					var state = pair.Value;
+					var session = pair.Value.ObservationSession;
+					var observerCount = session?.ObserverCount ?? 0;
+					if (observerCount > 0)
+						continue;
+
+					var isGameOver = session?.IsGameOver ?? state.World.IsGameOver;
+					var lastActivity = session?.LastObserverActivityUtc ?? state.CreatedUtc;
+					var ttl = isGameOver ? gameOverSessionTtl : idleSessionTtl;
+					if (ttl <= TimeSpan.Zero || now - lastActivity < ttl)
+						continue;
+
+					Log.Write("rl-bridge", $"event=session_ttl_expired session={pair.Key} game_over={isGameOver} ttl_seconds={ttl.TotalSeconds}");
+					DestroySession(pair.Key);
+				}
+			}
 		}
 
 		/// <summary>
@@ -175,7 +277,8 @@ namespace OpenRA.Mods.Common.Traits
 		/// the game world is created asynchronously on a background thread.
 		/// FastAdvance will wait for the bridge to activate before proceeding.
 		/// </summary>
-		public static string CreateSession(string mapName, string bots, int seed)
+		public static string CreateSession(string mapName, string bots, int seed,
+			string playerFaction = "", string enemyFaction = "", int playerSpawn = 0, int enemySpawn = 0)
 		{
 			var sessionId = Guid.NewGuid().ToString("N")[..12];
 			Log.Write("rl-bridge", $"Creating session {sessionId}: map={mapName}, bots={bots}, seed={seed}");
@@ -184,13 +287,15 @@ namespace OpenRA.Mods.Common.Traits
 			{
 				try
 				{
-					InitSession(sessionId, mapName, bots, seed);
+					InitSession(sessionId, mapName, bots, seed, playerFaction, enemyFaction, playerSpawn, enemySpawn);
 				}
 				catch (Exception e)
 				{
 					Log.Write("rl-bridge", $"Session {sessionId} init failed: {e}");
+					SessionFailures[sessionId] = new SessionFailure("session_init_failed", e.Message);
 					SessionStates.TryRemove(sessionId, out _);
 
+					ObservationSessionRegistry.Lookup(sessionId)?.Deactivate();
 					if (ExternalBotBridge.Sessions.TryRemove(sessionId, out var crashed))
 						crashed.Deactivate();
 				}
@@ -209,11 +314,14 @@ namespace OpenRA.Mods.Common.Traits
 		/// </summary>
 		public static void DestroySession(string sessionId)
 		{
+			SessionFailures.TryRemove(sessionId, out _);
+			ObservationSessionRegistry.Lookup(sessionId)?.Deactivate();
 			if (ExternalBotBridge.Sessions.TryGetValue(sessionId, out var bridge))
 				bridge.Deactivate();
 
 			if (SessionStates.TryRemove(sessionId, out var state))
 			{
+				state.StopContinuous();
 				// Wait for any in-flight work to finish before disposing
 				var activeWork = state.ActiveWorkItem;
 				if (activeWork != null)
@@ -242,6 +350,88 @@ namespace OpenRA.Mods.Common.Traits
 			}
 
 			Log.Write("rl-bridge", $"Session {sessionId} destroyed");
+		}
+
+		internal static bool TryGetSessionFailure(string sessionId, out string code, out string message)
+		{
+			if (SessionFailures.TryGetValue(sessionId, out var failure))
+			{
+				code = failure.Code;
+				message = failure.Message;
+				return true;
+			}
+
+			code = null;
+			message = null;
+			return false;
+		}
+
+		internal static bool TryGetObservationlessState(string sessionId, out RLProto.GameState state)
+		{
+			if (SessionStates.TryGetValue(sessionId, out var session) && session.ObservationSession == null)
+			{
+				var player = session.World.Players.FirstOrDefault(p => p.InternalName == "Multi1")
+					?? session.World.Players.FirstOrDefault(p => !p.NonCombatant);
+				state = ObservationSessionState.Snapshot(session.World, player, sessionId, true);
+				return true;
+			}
+
+			state = null;
+			return false;
+		}
+
+		static void ContinuousTickLoop(SessionState state, CancellationToken cancellationToken)
+		{
+			const int TickPeriodMilliseconds = 40; // OpenRA's normal 25 Hz simulation cadence.
+			var orderManager = state.OrderManager;
+			var world = state.World;
+			var stopwatch = new System.Diagnostics.Stopwatch();
+
+			while (!cancellationToken.IsCancellationRequested && !world.IsGameOver &&
+				(state.ObservationSession == null || state.ObservationSession.IsEnabled))
+			{
+				stopwatch.Restart();
+				try
+				{
+					state.TickLock.Wait(cancellationToken);
+				}
+				catch (OperationCanceledException) { break; }
+
+				try
+				{
+					orderManager.LastTickTime.Value = 0;
+					Sync.RunUnsynced(false, world, () =>
+					{
+						orderManager.TickImmediate();
+						return true;
+					});
+
+					if (orderManager.TryTick())
+						world.Tick();
+				}
+				catch (OperationCanceledException) { break; }
+				catch (Exception e)
+				{
+					Log.Write("rl-bridge", $"event=continuous_tick_error session={state.ObservationSession?.SessionId ?? "baseline"} error={e}");
+					break;
+				}
+				finally
+				{
+					state.TickLock.Release();
+				}
+
+				if (testGameOverAfterTicks > 0 &&
+					world.WorldTick - state.ContinuousStartTick >= testGameOverAfterTicks &&
+					Interlocked.Exchange(ref state.TestGameOverIssued, 1) == 0)
+				{
+					world.EndGame();
+					Log.Write("rl-bridge", $"event=test_gameover_end session={state.ObservationSession?.SessionId ?? "baseline"} tick={world.WorldTick}");
+				}
+
+			var remaining = TickPeriodMilliseconds - (int)stopwatch.ElapsedMilliseconds;
+				if (remaining > 0)
+					Thread.Sleep(remaining);
+			}
 		}
 
 		/// <summary>
@@ -285,7 +475,8 @@ namespace OpenRA.Mods.Common.Traits
 		/// Initialize a game session: create World, find bridge, register state.
 		/// The calling thread exits after this returns — no persistent tick loop.
 		/// </summary>
-		static void InitSession(string sessionId, string mapName, string bots, int seed)
+		static void InitSession(string sessionId, string mapName, string bots, int seed,
+			string playerFaction, string enemyFaction, int playerSpawn, int enemySpawn)
 		{
 			// 1. Resolve map (cached — only first request per map name hits MapCache).
 			//    MapCache.GetEnumerator() calls UpdateMaps() which mutates collections,
@@ -342,6 +533,7 @@ namespace OpenRA.Mods.Common.Traits
 			if (mapPreview == null)
 			{
 				Log.Write("rl-bridge", $"Session {sessionId}: Map '{mapName}' not found");
+				SessionFailures[sessionId] = new SessionFailure("map_not_found", $"Map '{mapName}' was not found.");
 				ResolvedMaps.TryRemove(mapName, out _); // Don't cache failures
 				return;
 			}
@@ -363,8 +555,10 @@ namespace OpenRA.Mods.Common.Traits
 			var connection = new EchoConnection();
 			var orderManager = new OrderManager(connection);
 
+			ValidateSessionConfiguration(mapPreview, map, playerFaction, enemyFaction, playerSpawn, enemySpawn);
+
 			// 5. Build LobbyInfo with map slots and bot assignments
-			SetupLobbyInfo(orderManager, mapPreview, map, bots, seed);
+			SetupLobbyInfo(orderManager, mapPreview, map, bots, seed, playerFaction, enemyFaction, playerSpawn, enemySpawn);
 
 			// 6. World creation + LoadComplete (serialized — traits access shared state).
 			//    With PrepareMap cached and map lookup cached, the lock only covers
@@ -374,8 +568,10 @@ namespace OpenRA.Mods.Common.Traits
 			{
 				Game.OrderManager = orderManager;
 				ExternalBotBridge.NextSessionId = sessionId;
+				ObservationSessionRegistry.NextSessionId = sessionId;
 				orderManager.World = new World(map, modData, orderManager, WorldType.Regular);
 				ExternalBotBridge.NextSessionId = null;
+				ObservationSessionRegistry.NextSessionId = null;
 				orderManager.World.LoadComplete(null);
 				orderManager.StartGame();
 			}
@@ -388,7 +584,7 @@ namespace OpenRA.Mods.Common.Traits
 			// hasn't been populated yet, causing NOT_FOUND.
 			SessionStates[sessionId] = new SessionState(orderManager, world);
 
-			// 8. Find the ExternalBotBridge
+			// 8. Find either the legacy action bridge or the Phase 1 read-only endpoint.
 			ExternalBotBridge bridge = null;
 			foreach (var player in world.Players)
 			{
@@ -400,30 +596,77 @@ namespace OpenRA.Mods.Common.Traits
 				}
 			}
 
-			if (bridge == null)
+			var observationSession = ObservationSessionRegistry.Lookup(sessionId);
+			if (bridge == null && observationSession == null)
 			{
-				Log.Write("rl-bridge", $"Session {sessionId}: ExternalBotBridge not found");
-				SessionStates.TryRemove(sessionId, out _);
-				world.Dispose();
-				orderManager.Dispose();
+				if (!allowObservationlessSessions)
+				{
+					Log.Write("rl-bridge", $"Session {sessionId}: observation endpoint not found");
+					SessionStates.TryRemove(sessionId, out _);
+					world.Dispose();
+					orderManager.Dispose();
+					return;
+				}
+
+				SessionStates[sessionId].StartContinuous(null);
+				Log.Write("rl-bridge", $"Session {sessionId}: Ready (observationless baseline mode)");
 				return;
 			}
 
-			// Re-register under the requested sessionId
-			var actualId = bridge.SessionId;
-			if (actualId != sessionId)
+			// Legacy ExternalBotBridge has its own registry and fast-advance model.
+			if (bridge != null)
 			{
-				ExternalBotBridge.Sessions.TryRemove(actualId, out _);
-				ExternalBotBridge.Sessions[sessionId] = bridge;
+				var actualId = bridge.SessionId;
+				if (actualId != sessionId)
+				{
+					ExternalBotBridge.Sessions.TryRemove(actualId, out _);
+					ExternalBotBridge.Sessions[sessionId] = bridge;
+				}
 			}
+			else
+				SessionStates[sessionId].StartContinuous(observationSession);
 
 			Log.Write("rl-bridge", $"Session {sessionId}: Ready (init thread exiting)");
+		}
+
+		static void ValidateSessionConfiguration(MapPreview mapPreview, Map map, string playerFaction, string enemyFaction, int playerSpawn, int enemySpawn)
+		{
+			var validFactions = mapPreview.WorldActorInfo.TraitInfos<FactionInfo>()
+				.Where(f => f.Selectable)
+				.Select(f => f.InternalName)
+				.ToHashSet(StringComparer.Ordinal);
+
+			if (!string.IsNullOrEmpty(playerFaction) && !validFactions.Contains(playerFaction))
+				throw new ArgumentException($"Invalid player_faction '{playerFaction}'.");
+			if (!string.IsNullOrEmpty(enemyFaction) && !validFactions.Contains(enemyFaction))
+				throw new ArgumentException($"Invalid enemy_faction '{enemyFaction}'.");
+
+			if (playerSpawn < 0 || playerSpawn > mapPreview.SpawnPoints.Length)
+				throw new ArgumentException($"Invalid player_spawn '{playerSpawn}'.");
+			if (enemySpawn < 0 || enemySpawn > mapPreview.SpawnPoints.Length)
+				throw new ArgumentException($"Invalid enemy_spawn '{enemySpawn}'.");
+
+			var players = new MapPlayers(map.PlayerDefinitions).Players;
+			ValidateLockedPlayerConfiguration(players.GetValueOrDefault("Multi1"), playerFaction, playerSpawn, "Multi1");
+			ValidateLockedPlayerConfiguration(players.GetValueOrDefault("Multi0"), enemyFaction, enemySpawn, "Multi0");
+		}
+
+		static void ValidateLockedPlayerConfiguration(PlayerReference reference, string faction, int spawn, string slot)
+		{
+			if (reference == null)
+				return;
+
+			if (reference.LockFaction && !string.IsNullOrEmpty(faction) && !string.Equals(reference.Faction, faction, StringComparison.Ordinal))
+				throw new ArgumentException($"{slot} faction is map-locked to '{reference.Faction}'.");
+			if (reference.LockSpawn && spawn > 0 && reference.Spawn != spawn)
+				throw new ArgumentException($"{slot} spawn is map-locked to '{reference.Spawn}'.");
 		}
 
 		/// <summary>
 		/// Build LobbyInfo for a game session with the specified bot configuration.
 		/// </summary>
-		static void SetupLobbyInfo(OrderManager orderManager, MapPreview mapPreview, Map map, string botsConfig, int seed)
+		static void SetupLobbyInfo(OrderManager orderManager, MapPreview mapPreview, Map map, string botsConfig, int seed,
+			string playerFaction, string enemyFaction, int playerSpawn, int enemySpawn)
 		{
 			var lobbyInfo = orderManager.LobbyInfo;
 
@@ -504,6 +747,21 @@ namespace OpenRA.Mods.Common.Traits
 						Color = Color.FromArgb(rng.Next(256), rng.Next(256), rng.Next(256)),
 						PreferredColor = Color.FromArgb(rng.Next(256), rng.Next(256), rng.Next(256)),
 					};
+
+					if (slotName == "Multi1")
+					{
+						if (!string.IsNullOrEmpty(playerFaction))
+							botClient.Faction = playerFaction;
+						if (playerSpawn > 0)
+							botClient.SpawnPoint = playerSpawn;
+					}
+					else if (slotName == "Multi0")
+					{
+						if (!string.IsNullOrEmpty(enemyFaction))
+							botClient.Faction = enemyFaction;
+						if (enemySpawn > 0)
+							botClient.SpawnPoint = enemySpawn;
+					}
 
 					var pr = mapPlayers.Players.GetValueOrDefault(slotName);
 					if (pr != null)

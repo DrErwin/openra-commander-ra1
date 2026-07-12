@@ -33,6 +33,7 @@ namespace OpenRA.Mods.Common.Traits
 		BuildingInfluence buildingInfluence;
 		Locomotor locomotor;
 		bool traitsCached;
+		float[] staticSpatialMap;
 
 		public ObservationSerializer(World world, Player player, string episodeId)
 		{
@@ -52,6 +53,34 @@ namespace OpenRA.Mods.Common.Traits
 
 			// Use first available locomotor for passability checks
 			locomotor = world.WorldActor.TraitsImplementing<Locomotor>().FirstOrDefault();
+		}
+
+		void EnsureStaticSpatialMap()
+		{
+			if (staticSpatialMap != null)
+				return;
+
+			EnsureTraitsCached();
+			var map = world.Map;
+			var width = map.MapSize.Width;
+			var height = map.MapSize.Height;
+			staticSpatialMap = new float[height * width * SpatialChannelCount];
+			foreach (var cell in map.AllCells)
+			{
+				var x = cell.X;
+				var y = cell.Y;
+				if (x < 0 || x >= width || y < 0 || y >= height)
+					continue;
+
+				var baseIdx = (y * width + x) * SpatialChannelCount;
+				staticSpatialMap[baseIdx] = map.GetTerrainIndex(cell);
+				staticSpatialMap[baseIdx + 1] = map.Height[cell];
+				if (locomotor != null)
+				{
+					var cost = locomotor.MovementCostForCell(cell);
+					staticSpatialMap[baseIdx + 3] = cost >= PathGraph.MovementCostForUnreachableCell ? 0f : 1f;
+				}
+			}
 		}
 
 		public RLProto.GameObservation Serialize(int tick)
@@ -412,7 +441,7 @@ namespace OpenRA.Mods.Common.Traits
 
 		void SerializeSpatialMap(RLProto.GameObservation obs)
 		{
-			EnsureTraitsCached();
+			EnsureStaticSpatialMap();
 
 			var map = world.Map;
 			var width = map.MapSize.Width;
@@ -420,7 +449,7 @@ namespace OpenRA.Mods.Common.Traits
 			var shroud = player.Shroud;
 
 			// Allocate spatial tensor: H × W × channels, row-major channels-last
-			var data = new float[height * width * SpatialChannelCount];
+			var data = (float[])staticSpatialMap.Clone();
 
 			// Pre-compute actor cell positions for unit/building density layers
 			var ownBuildingCells = new bool[height * width];
@@ -478,24 +507,11 @@ namespace OpenRA.Mods.Common.Traits
 				var baseIdx = (y * width + x) * SpatialChannelCount;
 				var cellIdx = y * width + x;
 
-				// Ch 0: Terrain type index
-				data[baseIdx + 0] = map.GetTerrainIndex(cell);
-
-				// Ch 1: Height
-				data[baseIdx + 1] = map.Height[cell];
-
 				// Ch 2: Resource density
 				if (resourceLayer != null)
 				{
 					var resource = resourceLayer.GetResource(cell);
 					data[baseIdx + 2] = resource.Density;
-				}
-
-				// Ch 3: Passability (1=passable, 0=impassable)
-				if (locomotor != null)
-				{
-					var cost = locomotor.MovementCostForCell(cell);
-					data[baseIdx + 3] = cost >= PathGraph.MovementCostForUnreachableCell ? 0f : 1f;
 				}
 
 				// Ch 4: Fog of war (0=hidden, 0.5=explored, 1=visible)

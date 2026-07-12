@@ -15,6 +15,10 @@ service RLBridge {
   // Unary: query current game state on demand.
   rpc GetState(StateRequest) returns (GameState);
 
+  // Server stream: read continuous observations from an autonomous bot.
+  // Unlike GameSession, this endpoint never accepts commands.
+  rpc StreamObservations(StateRequest) returns (stream GameObservation);
+
   // Unary: advance N ticks with optional commands, return observation.
   // Bypasses streaming — works reliably on all platforms.
   rpc FastAdvance(FastAdvanceRequest) returns (GameObservation);
@@ -63,6 +67,12 @@ message GameObservation {
   bool interrupted = 18;           // true if advance ended early due to interrupt
   string interrupt_reason = 19;    // signal name (e.g. "enemy_spotted")
   int32 actual_ticks_advanced = 20; // ticks actually advanced (may be < requested)
+
+  // Phase 1 observation freshness and compatibility metadata.
+  uint64 observation_sequence = 21;
+  int64 observed_at_unix_ms = 22;
+  int32 serialization_ms = 23;
+  string schema_version = 24;
 }
 
 message RlEconomy {
@@ -189,7 +199,8 @@ enum ActionType {
   POWER_DOWN = 18;      // Toggle building power on/off (actor_id = building)
   SET_PRIMARY = 19;     // Set primary production building (actor_id = building)
   SURRENDER = 20;       // Surrender / resign — ends the game as a loss
-  FAST_ADVANCE = 21;    // Fast-forward N ticks at CPU speed (no real-time sleeping)
+  FAST_ADVANCE = 21;
+  PATROL = 22;          // Patrol between current position and target
 }
 
 // ─── State Query ─────────────────────────────────────────────────────────────
@@ -202,6 +213,10 @@ message GameState {
   int32 player_count = 5;
   string player_faction = 6;  // Player faction internal name (e.g. "england", "ukraine")
   string enemy_faction = 7;   // Opponent faction internal name (if known)
+  string error_code = 8;      // Non-empty when phase == "error"
+  string error_message = 9;
+  int32 player_spawn = 10;    // Resolved spawn point; 0 when automatic/unknown
+  int32 enemy_spawn = 11;     // Resolved spawn point; 0 when automatic/unknown
 }
 
 message StateRequest {
@@ -228,6 +243,10 @@ message CreateSessionRequest {
   string map_name = 1;    // Map filename or UID
   string bots = 2;        // Bot config: "Multi1:rl-agent,Multi0:beginner"
   int32 seed = 3;         // Random seed (0 = random)
+  string player_faction = 4; // Explicit faction for Multi1; empty retains legacy behavior
+  string enemy_faction = 5;  // Explicit faction for Multi0; empty retains legacy behavior
+  int32 player_spawn = 6;    // Explicit spawn index for Multi1; 0 retains legacy behavior
+  int32 enemy_spawn = 7;     // Explicit spawn index for Multi0; 0 retains legacy behavior
 }
 
 message CreateSessionResponse {

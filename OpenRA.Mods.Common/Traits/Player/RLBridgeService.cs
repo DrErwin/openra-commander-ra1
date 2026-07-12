@@ -63,6 +63,21 @@ namespace OpenRA.Mods.Common.Traits
 			return null;
 		}
 
+		static async Task<IObservationSession> WaitForObservationSession(string sessionId, CancellationToken ct)
+		{
+			var attempts = string.IsNullOrEmpty(sessionId) ? 600 : 3000;
+			for (var i = 0; i < attempts; i++)
+			{
+				var session = ObservationSessionRegistry.Lookup(sessionId);
+				if (session != null && session.IsEnabled)
+					return session;
+
+				await Task.Delay(100, ct);
+			}
+
+			return null;
+		}
+
 		/// <summary>
 		/// Bidirectional streaming: game sends observations, agent sends actions.
 		/// </summary>
@@ -168,6 +183,24 @@ namespace OpenRA.Mods.Common.Traits
 			RLProto.StateRequest request,
 			ServerCallContext context)
 		{
+			if (RLSessionManager.TryGetSessionFailure(request.SessionId, out var errorCode, out var errorMessage))
+			{
+				return Task.FromResult(new RLProto.GameState
+				{
+					EpisodeId = request.SessionId,
+					Phase = "error",
+					ErrorCode = errorCode,
+					ErrorMessage = errorMessage,
+				});
+			}
+
+			var observationSession = ObservationSessionRegistry.Lookup(request.SessionId);
+			if (observationSession != null)
+				return Task.FromResult(observationSession.GetCurrentState());
+
+			if (RLSessionManager.TryGetObservationlessState(request.SessionId, out var observationlessState))
+				return Task.FromResult(observationlessState);
+
 			var bridge = ExternalBotBridge.LookupSession(request.SessionId);
 			if (bridge == null)
 			{
@@ -181,18 +214,51 @@ namespace OpenRA.Mods.Common.Traits
 		}
 
 		/// <summary>
+		/// Read a continuous, read-only observation stream from agent-normal.
+		/// An observer disconnect never stops its game session.
+		/// </summary>
+		public override async Task StreamObservations(
+			RLProto.StateRequest request,
+			IServerStreamWriter<RLProto.GameObservation> responseStream,
+			ServerCallContext context)
+		{
+			var session = await WaitForObservationSession(request.SessionId, context.CancellationToken);
+			if (session == null)
+				throw new RpcException(new Status(StatusCode.Unavailable,
+					$"Observation session not activated (session_id={request.SessionId})"));
+
+			session.OnObserverConnected();
+			try
+			{
+				while (!context.CancellationToken.IsCancellationRequested)
+				{
+					var observation = await session.ObservationReader.ReadAsync(context.CancellationToken);
+					await responseStream.WriteAsync(observation, context.CancellationToken);
+					if (observation.Done)
+						return;
+				}
+			}
+			catch (OperationCanceledException) { }
+			catch (ChannelClosedException) { }
+			finally
+			{
+				session.OnObserverDisconnected();
+			}
+		}
+
+		/// <summary>
 		/// Create a new game session. Only available in multi-session mode.
 		/// </summary>
 		public override Task<RLProto.CreateSessionResponse> CreateSession(
 			RLProto.CreateSessionRequest request,
 			ServerCallContext context)
 		{
-			if (!ExternalBotBridge.MultiSessionMode)
+			if (!RLSessionManager.IsMultiSessionMode)
 				throw new RpcException(new Status(StatusCode.Unimplemented,
 					"CreateSession is only available in multi-session mode"));
 
-			var sessionId = RLSessionManager.CreateSession(
-				request.MapName, request.Bots, request.Seed);
+			var sessionId = RLSessionManager.CreateSession(request.MapName, request.Bots, request.Seed,
+				request.PlayerFaction, request.EnemyFaction, request.PlayerSpawn, request.EnemySpawn);
 
 			return Task.FromResult(new RLProto.CreateSessionResponse
 			{
@@ -207,7 +273,7 @@ namespace OpenRA.Mods.Common.Traits
 			RLProto.DestroySessionRequest request,
 			ServerCallContext context)
 		{
-			if (!ExternalBotBridge.MultiSessionMode)
+			if (!RLSessionManager.IsMultiSessionMode)
 				throw new RpcException(new Status(StatusCode.Unimplemented,
 					"DestroySession is only available in multi-session mode"));
 

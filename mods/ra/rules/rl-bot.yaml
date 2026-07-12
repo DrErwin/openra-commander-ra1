@@ -1,4 +1,23 @@
 Player:
+	# Phase 1 controlled player: exact same ModularBot modules as normal, plus
+	# a private steering/observation condition.  Other bot types never receive
+	# enable-agent-steering and therefore cannot load these traits.
+	ModularBot@AgentNormalAI:
+		Name: Agent Normal AI
+		Type: agent-normal
+	GrantConditionOnBotOwner@agent-normal-base:
+		Condition: enable-normal-ai
+		Bots: agent-normal
+	GrantConditionOnBotOwner@agent-normal-steering:
+		Condition: enable-agent-steering
+		Bots: agent-normal
+	SteeringModule:
+		RequiresCondition: enable-agent-steering
+		HeartbeatInterval: 250
+	ObservationTrait:
+		RequiresCondition: enable-agent-steering
+		Port: 9999
+		ObservationInterval: 10
 	ExternalBotBridge@RLAGENT:
 		Name: bot-rl-agent.name
 		Type: rl-agent
