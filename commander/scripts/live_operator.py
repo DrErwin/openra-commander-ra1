@@ -272,7 +272,10 @@ def _supervisor(args: argparse.Namespace) -> int:
         if bridge is not None:
             bridge.close()
         exit_code = manager.kill(timeout=3)
-        metadata.update({"status": metadata.get("status", "stopped"), "stopped_at_unix_ms": int(time.time() * 1000),
+        final_status = metadata.get("status")
+        if final_status not in {"game_over", "error"}:
+            final_status = "stopped"
+        metadata.update({"status": final_status, "stopped_at_unix_ms": int(time.time() * 1000),
                          "game_exit_code": exit_code, "keepalive": keepalive_result})
         if stop_path.exists():
             stop_path.unlink()
