@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OpenRA Commander · Phase 1 Demo</title>
+  <style>
+    :root{--bg:#090b10;--panel:#111722;--panel2:#151e2c;--line:#263449;--text:#e7edf6;--muted:#8da0b8;--red:#e05252;--amber:#efb34b;--green:#62d39b;--blue:#71b7ef;--shadow:0 14px 40px #0008}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#2d1519 0,#090b10 36%,#06070a 100%);color:var(--text);font:14px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;min-height:100vh}
+    header{border-bottom:1px solid var(--line);background:#090b10dd;backdrop-filter:blur(12px);position:sticky;top:0;z-index:4;padding:14px 22px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+    .brand{display:flex;align-items:center;gap:12px}.sigil{height:34px;width:34px;border:2px solid var(--red);border-radius:50%;display:grid;place-items:center;color:var(--red);font-weight:800}.brand h1{margin:0;font-size:18px;letter-spacing:.08em}.brand small{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+    .top-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}.pill{border:1px solid var(--line);border-radius:999px;padding:5px 10px;color:var(--muted);font-size:11px}.pill.ok{border-color:#276e51;color:var(--green)}.pill.warn{border-color:#775523;color:var(--amber)}button{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:6px;padding:6px 10px;cursor:pointer}button:hover{border-color:var(--blue)}
+    main{max-width:1500px;margin:0 auto;padding:18px;display:grid;grid-template-columns:1.3fr .9fr;gap:14px}.panel{background:linear-gradient(145deg,#121a27ee,#0d131eee);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);overflow:hidden}.panel h2{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#b8c7da;margin:0;padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}.panel-body{padding:14px}.span-2{grid-column:1/-1}
+    #game-panel{min-height:430px}.game-frame{height:355px;background:#080c13;border:1px solid #243149;border-radius:7px;overflow:hidden;position:relative}.game-frame iframe{width:100%;height:100%;border:0;background:#05070b}.game-fallback{height:100%;display:grid;place-items:center;background:linear-gradient(145deg,#111e2a,#0b1119);position:relative;overflow:hidden}.game-fallback:before{content:"";position:absolute;inset:0;background-image:linear-gradient(#52708c22 1px,transparent 1px),linear-gradient(90deg,#52708c22 1px,transparent 1px);background-size:28px 28px;transform:perspective(600px) rotateX(48deg) scale(1.4);transform-origin:bottom center}.game-message{position:relative;text-align:center;color:var(--muted);max-width:480px;padding:22px}.game-message strong{display:block;color:var(--text);font-size:16px;margin-bottom:8px}.map-card{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-top:10px}.zone{height:35px;border:1px solid #2b3d57;background:#142235;color:#91aac7;display:grid;place-items:center;font-size:10px;border-radius:4px}.zone.hot{border-color:#9d573b;color:#ffc07a;background:#2a1d1b}.game-foot{display:flex;justify-content:space-between;color:var(--muted);font-size:11px;margin-top:8px}
+    .metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.metric{background:#0c121c;border:1px solid var(--line);border-radius:6px;padding:10px}.metric .label{color:var(--muted);font-size:10px}.metric .value{font-size:18px;margin-top:4px;color:#f5f8fc}.metric .sub{font-size:10px;color:var(--muted);margin-top:3px}.metric.good .value{color:var(--green)}.metric.alert .value{color:var(--amber)}
+    table{width:100%;border-collapse:collapse;font-size:11px}th{text-align:left;color:var(--muted);font-weight:500;padding:7px 6px;border-bottom:1px solid var(--line)}td{padding:8px 6px;border-bottom:1px solid #1b2737;vertical-align:top}.status{font-size:10px;border-radius:4px;padding:3px 6px;border:1px solid var(--line);white-space:nowrap}.status.succeeded{color:var(--green);border-color:#276e51}.status.blocked{color:var(--amber);border-color:#775523}.status.cancelled{color:#c5a4ef;border-color:#5b4680}.status.pending{color:var(--blue);border-color:#315c7a}.mono-muted{color:var(--muted)}
+    .alert-list{display:grid;gap:7px}.alert{border-left:3px solid var(--blue);background:#0c121c;padding:8px 10px;border-radius:0 5px 5px 0}.alert.warning{border-color:var(--amber)}.alert .line{display:flex;justify-content:space-between;gap:8px}.alert .type{color:#a9c9eb}.alert .text{margin-top:3px;color:#d7e0ed;font-size:11px}.alert .seq{color:var(--muted);font-size:10px}
+    .timeline{position:relative;padding:12px 0 8px}.timeline-line{height:3px;background:#2d3e55;position:absolute;left:12px;right:12px;top:31px}.timeline-items{display:grid;grid-template-columns:repeat(var(--count),1fr);gap:4px;position:relative}.event{min-width:0}.dot{height:14px;width:14px;border:3px solid var(--blue);background:#0b1018;border-radius:50%;margin:0 auto 8px}.event.warning .dot{border-color:var(--amber)}.event.cancel .dot{border-color:#bb8ff2}.event-label{text-align:center;font-size:10px;color:#cbd8e8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.event-tick{text-align:center;color:var(--muted);font-size:10px;margin-top:3px}.timeline-note{color:var(--muted);font-size:10px;margin-top:10px}
+    .check-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.check{border:1px solid #276e51;color:var(--green);padding:8px;border-radius:5px;background:#0d1917;font-size:10px}.check.fail{border-color:#7f3e3e;color:#ff9e9e;background:#1b1012}.source-list{display:flex;flex-wrap:wrap;gap:6px}.source{font-size:10px;padding:4px 7px;border-radius:4px;background:#0d131e;border:1px solid var(--line);color:var(--muted)}
+    @media(max-width:1000px){main{grid-template-columns:1fr}.span-2{grid-column:auto}.metric-grid,.check-grid{grid-template-columns:repeat(2,1fr)}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand"><div class="sigil">RA</div><div><h1>OPENRA COMMANDER / PHASE 1 DEMO</h1><small id="subtitle">loading canonical profile…</small></div></div>
+    <div class="top-meta"><span class="pill ok" id="connection">DEMO DATA READY</span><span class="pill" id="viewer-mode">viewer: fallback</span><button id="refresh" type="button">刷新</button></div>
+  </header>
+  <main>
+    <section class="panel" id="game-panel"><h2><span>战场画面 / BATTLEFIELD</span><span class="mono-muted" id="tick">tick —</span></h2><div class="panel-body"><div class="game-frame" id="game-frame"></div><div class="game-foot"><span id="map-label">map —</span><span id="profile-label">profile —</span><span id="fresh-label">freshness —</span></div></div></section>
+    <section class="panel" id="summary-panel"><h2><span>战场摘要 / SITUATION</span><span class="mono-muted">semantic view</span></h2><div class="panel-body"><div class="metric-grid" id="metrics"></div><div style="height:12px"></div><div class="source-list" id="sources"></div></div></section>
+    <section class="panel" id="mission-panel"><h2><span>老板手令 / MISSIONS</span><span class="mono-muted">missions.yaml mirror</span></h2><div class="panel-body"><table><thead><tr><th>ID</th><th>类型</th><th>优先级</th><th>状态</th><th>tick</th><th>原因</th></tr></thead><tbody id="missions"></tbody></table></div></section>
+    <section class="panel" id="alert-panel"><h2><span>关键告警 / ALERTS</span><span class="mono-muted" id="cursor">cursor —</span></h2><div class="panel-body"><div class="alert-list" id="alerts"></div></div></section>
+    <section class="panel span-2" id="timeline-panel"><h2><span>回放 + 审计时间线 / REPLAY AUDIT</span><span class="mono-muted" id="replay-label">replay —</span></h2><div class="panel-body"><div class="timeline" id="timeline"></div><div class="timeline-note" id="timeline-note"></div></div></section>
+    <section class="panel span-2" id="checks-panel"><h2><span>验收状态 / GATE CHECKS</span><span class="mono-muted">read-only evidence</span></h2><div class="panel-body"><div class="check-grid" id="checks"></div></div></section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const statusClass = (v) => String(v || '').toLowerCase().replace(/[^a-z]+/g,'-');
+    function renderGame(state){
+      const url = state.viewer?.novnc_url;
+      $('viewer-mode').textContent = `viewer: ${url ? 'noVNC' : 'replay/fallback'}`;
+      if(url) $('game-frame').innerHTML = `<iframe title="OpenRA noVNC viewer" src="${esc(url)}"></iframe>`;
+      else {
+        const zones = Object.keys(state.battlefield?.map?.zones || {});
+        const contested = new Set(state.battlefield?.map?.contested_zones || []);
+        $('game-frame').innerHTML = `<div class="game-fallback"><div class="game-message"><strong>Replay / headless viewer fallback</strong><div>noVNC URL 未配置。当前展示仍使用 canonical observation、POI、任务和审计时间线；配置 <code>--novnc-url</code> 后此面板会嵌入实时/回放画面。</div><div class="map-card">${zones.map(z => `<div class="zone ${contested.has(z)?'hot':''}">${esc(z)}</div>`).join('')}</div></div></div>`;
+      }
+      const bf=state.battlefield||{}; $('tick').textContent=`tick ${bf.tick ?? '—'}`; $('map-label').textContent=`${bf.map?.name || 'Agenda'} ${bf.map?.width||''}×${bf.map?.height||''}`; $('profile-label').textContent=`seed ${state.canonical?.seed ?? '—'} · ${state.canonical?.player || ''}`; $('fresh-label').textContent=`${bf.stale ? 'STALE' : 'fresh'} · schema ${bf.schema_version ?? 1}`;
+    }
+    function renderSummary(state){
+      const bf=state.battlefield||{}, map=bf.map||{}, zones=map.zones||{};
+      const metrics=[['POI',Array.isArray(map.poi) ? map.poi.length : '—','map'],['zones',Object.keys(zones).length || '—','map'],['semantic alerts',(state.alerts||[]).length,'alerts'],['missions',(state.missions||[]).length,'missions']];
+      $('metrics').innerHTML=metrics.map(([l,v,s])=>`<div class="metric ${s==='economy'&&l==='power deficit'&&Number(v)>0?'alert':''}"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div><div class="sub">${esc(s)}</div></div>`).join('');
+      $('sources').innerHTML=(state.sources||[]).map(x=>`<span class="source">${esc(x)}</span>`).join('');
+    }
+    function renderMissions(state){
+      const rows=state.missions||[]; $('missions').innerHTML=rows.length?rows.map(m=>`<tr><td>${esc(m.id)}</td><td>${esc(m.type)}</td><td>${esc(m.priority||'—')}</td><td><span class="status ${statusClass(m.status)}">${esc(m.status)}</span></td><td>${esc(m.completed_at_tick ?? m.accepted_at_tick ?? m.ingested_at_tick ?? '—')}</td><td class="mono-muted">${esc(m.failure_reason||m.blocker||'—')}</td></tr>`).join(''):`<tr><td colspan="6" class="mono-muted">暂无任务</td></tr>`;
+    }
+    function renderAlerts(state){const a=state.alerts||[]; $('cursor').textContent=`${a.length} alerts · ${state.alert_cursor||'cursor —'}`; $('alerts').innerHTML=a.length?a.slice(0,8).map(x=>`<div class="alert ${x.severity==='warning'?'warning':''}"><div class="line"><span class="type">${esc(x.type)} / ${esc(x.severity)}</span><span class="seq">#${esc(x.sequence)} · t${esc(x.tick)}</span></div><div class="text">${esc(x.message)}</div></div>`).join(''):`<div class="mono-muted">暂无关键告警</div>`}
+    function renderTimeline(state){const ev=state.timeline||[]; const count=Math.max(ev.length,1); $('timeline').innerHTML=`<div class="timeline-line"></div><div class="timeline-items" style="--count:${count}">${ev.map(x=>`<div class="event ${x.event==='cancelled'||x.event==='lease_released'?'cancel':''} ${x.event==='blocked'?'warning':''}"><div class="dot"></div><div class="event-label">${esc(x.event)}</div><div class="event-tick">t${esc(x.tick)} · f${esc(x.replay_frame)}</div></div>`).join('')}</div>`; $('timeline-note').textContent=state.replay?.alignment_note || 'audit events are mapped to replay network frames'; $('replay-label').textContent=state.replay?.found?`${state.replay.size} bytes · max frame ${state.replay.max_frame}`:'replay unavailable';}
+    function renderChecks(state){const c=state.checks||{}; $('checks').innerHTML=Object.entries(c).map(([k,v])=>`<div class="check ${v?'':'fail'}">${v?'✓':'✕'} ${esc(k)}</div>`).join('')}
+    async function load(){try{const r=await fetch('/api/state',{cache:'no-store'});const state=await r.json();$('connection').textContent='DEMO DATA READY';$('subtitle').textContent=`${state.canonical?.map || 'agenda.oramap'} · canonical seed ${state.canonical?.seed ?? '—'} · session ${state.session_id || '—'}`;renderGame(state);renderSummary(state);renderMissions(state);renderAlerts(state);renderTimeline(state);renderChecks(state)}catch(e){$('connection').textContent='DEMO DATA ERROR';$('connection').className='pill warn';console.error(e)}}
+    $('refresh').addEventListener('click',load); load(); setInterval(load,3000);
+  </script>
+</body>
+</html>
