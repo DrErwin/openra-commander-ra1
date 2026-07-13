@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "profile": "phase1d-live-operator",
+  "map": "agenda.oramap",
+  "session_id": "b8f5b24c9782",
+  "runtime_mode": "headless_rehearsal",
+  "requested_player": "Multi1:agent-normal",
+  "requested_enemy": "Multi0:easy",
+  "checks": {
+    "bridge_connected": true,
+    "observation_read": true,
+    "tick_progressed": true,
+    "autonomous_bot_progressed": true,
+    "capture_issue_persisted": true,
+    "capture_started_after_production": true,
+    "mission_audit_written": true,
+    "clean_stop": true
+  },
+  "operator_commands": [
+    "python commander/scripts/live_operator.py observe",
+    "python commander/scripts/live_operator.py turn \"抢中间偏西的油井\"",
+    "python commander/scripts/live_operator.py turn \"生产 e6 工程师\""
+  ],
+  "visible_mode": {
+    "default_headless": false,
+    "launcher": "OpenRA/bin/OpenRA.exe",
+    "sandbox_window_check": "not_available"
+  },
+  "pass": true
+}

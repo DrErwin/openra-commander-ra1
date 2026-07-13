@@ -173,6 +173,14 @@ class OpenRAProcessManager:
         # Find the game client executable (OpenRA.dll, not OpenRA.Server.dll)
         exe = None
         for search_dir in [openra_path, openra_path / "bin"]:
+            # On Windows prefer the apphost executable for visible sessions so
+            # SDL attaches to the user's desktop.  The DLL + dotnet fallback
+            # remains useful for headless CI and Linux.
+            if os.name == "nt":
+                game_exe = search_dir / "OpenRA.exe"
+                if game_exe.exists():
+                    exe = [str(game_exe)]
+                    break
             game_dll = search_dir / "OpenRA.dll"
             if game_dll.exists():
                 exe = ["dotnet", str(game_dll)]

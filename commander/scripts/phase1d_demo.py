@@ -65,6 +65,44 @@ def _timeline(audit: list[dict[str, Any]], replay: dict[str, Any]) -> list[dict[
     return rows
 
 
+def _mission_scrub(evidence_root: Path) -> dict[str, Any]:
+    """Rich mission timeline from the Phase 1b 180s gate, for the scrubber.
+
+    The default dashboard state mirrors the short Phase 1c live session; the
+    scrubber instead drives the deeper Phase 1b mission loop (build -> produce
+    -> directed attack lease -> capture preemption -> resume -> cancel)."""
+    path = evidence_root.parent / "phase1b" / "phase1b-mission-gate-final.json"
+    if not path.exists():
+        return {"available": False, "session_id": None, "tick_min": 0, "tick_max": 0,
+                "missions": [], "audit": [], "source": None}
+    data = _read_json(path)
+    _ms = data.get("mission_status")
+    if isinstance(_ms, dict) and "missions" in _ms:
+        raw_missions = _ms["missions"]
+    elif isinstance(_ms, dict):
+        raw_missions = list(_ms.values())
+    else:
+        raw_missions = _ms or data.get("missions") or []
+    missions = [{
+        "id": m.get("id"), "type": m.get("type"), "priority": m.get("priority"),
+        "final_status": m.get("status"), "accepted_at_tick": m.get("accepted_at_tick"),
+        "started_at_tick": m.get("started_at_tick"), "completed_at_tick": m.get("completed_at_tick"),
+        "expires_at_tick": m.get("expires_at_tick"), "failure_reason": m.get("failure_reason"),
+        "blocker": m.get("blocker"), "blocked_by": m.get("blocked_by"),
+    } for m in raw_missions]
+    indexed = [({"tick": int(e.get("tick", 0)), "mission_id": e.get("mission_id"),
+                 "event": e.get("event"), "reason": e.get("reason")}, i)
+               for i, e in enumerate(data.get("audit") or [])]
+    indexed.sort(key=lambda p: (p[0]["tick"], p[1]))
+    audit = [p[0] for p in indexed]
+    ticks = [e["tick"] for e in audit] + \
+        [m.get("accepted_at_tick") for m in missions if m.get("accepted_at_tick") is not None] + \
+        [m.get("completed_at_tick") for m in missions if m.get("completed_at_tick") is not None]
+    return {"available": True, "session_id": data.get("session_id"),
+            "tick_min": min(ticks) if ticks else 0, "tick_max": max(ticks) if ticks else 0,
+            "missions": missions, "audit": audit, "source": "phase1b-mission-gate-final.json"}
+
+
 def build_state(evidence_root: Path = DEFAULT_EVIDENCE, novnc_url: str = "") -> dict[str, Any]:
     evidence = _read_json(evidence_root / "phase1c-live-mcp.json")
     regression = _read_json(evidence_root / "phase1c-live-mcp-regression.json")
@@ -93,6 +131,7 @@ def build_state(evidence_root: Path = DEFAULT_EVIDENCE, novnc_url: str = "") -> 
         "checks": checks,
         "regression": regression.get("checks", {}),
         "sources": ["phase1c-live-mcp.json", "phase1c-live-mcp-regression.json", "phase1c-live-mcp.orarep"],
+        "mission_scrub": _mission_scrub(evidence_root),
     }
 
 

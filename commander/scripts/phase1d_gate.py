@@ -1,9 +1,9 @@
-"""Phase 1d release gate for the read-only demo workspace.
+"""Phase 1d release gate for the demo bundle and live operator rehearsal.
 
 The gate consumes committed Phase 1a/1b/1c evidence, builds the canonical
-demo bundle, and writes a machine-readable release decision.  It deliberately
-does not start OpenRA or issue a mission: 1d is the presentation and evidence
-closure layer, while engine behavior is proven by the earlier gates.
+demo bundle, and checks the recorded live-operator rehearsal.  It does not
+start OpenRA during the release gate itself; the live process is exercised by
+the bounded rehearsal and its session/audit evidence.
 """
 
 from __future__ import annotations
@@ -105,6 +105,8 @@ def run_gate(output: Path = DEMO_EVIDENCE, novnc_url: str = "") -> dict[str, Any
     phase1c = _load(EVIDENCE / "phase1c" / "phase1c-live-mcp.json")
     phase1c_regression = _load(EVIDENCE / "phase1c" / "phase1c-live-mcp-regression.json")
     output.mkdir(parents=True, exist_ok=True)
+    live_operator_path = output / "phase1d-live-operator.json"
+    live_operator = _load(live_operator_path) if live_operator_path.is_file() else {}
     state = build_bundle(EVIDENCE / "phase1c", output, novnc_url)
     regression_path = _write_final_regression(output, phase1b, phase1c_regression)
     rehearsal_path = output / "phase1d-canonical-rehearsal.json"
@@ -119,6 +121,7 @@ def run_gate(output: Path = DEMO_EVIDENCE, novnc_url: str = "") -> dict[str, Any
         output / "phase1d-demo-script.md",
         output.parent.parent / "phase1d-operator-guide.md",
         output.parent.parent / "phase1-release-notes.md",
+        live_operator_path,
     ]
     checks = {
         "canonical_profile": _canonical_ok(state.get("canonical", {})) and _canonical_ok(phase1a.get("canonical", {})) and _canonical_ok(phase1b_canonical.get("canonical", {})) and _canonical_ok(phase1c.get("canonical", {})),
@@ -131,6 +134,7 @@ def run_gate(output: Path = DEMO_EVIDENCE, novnc_url: str = "") -> dict[str, Any
         "dashboard_read_only": _static_dashboard_ok(),
         "demo_state_schema": state.get("schema_version") == 1 and bool(state.get("session_id")) and state.get("viewer", {}).get("mode") in {"novnc", "replay-fallback"},
         "canonical_rehearsal": bool(rehearsal.get("pass")),
+        "live_operator_rehearsal": bool(live_operator.get("pass")) and bool(live_operator.get("checks", {}).get("observation_is_fresh")) and bool(live_operator.get("checks", {}).get("capture_in_progress_with_assigned_units")),
         "release_artifacts_present": all(path.is_file() for path in release_artifacts),
     }
     artifacts = [
@@ -143,6 +147,7 @@ def run_gate(output: Path = DEMO_EVIDENCE, novnc_url: str = "") -> dict[str, Any
         "phase1d-demo-script.md",
         "../../phase1d-operator-guide.md",
         "../../phase1-release-notes.md",
+        "phase1d-live-operator.json",
     ]
     result = {
         "schema_version": 1,
@@ -164,6 +169,7 @@ def run_gate(output: Path = DEMO_EVIDENCE, novnc_url: str = "") -> dict[str, Any
             "未配置 noVNC 时使用 replay/state fallback；dashboard 本身只读，不下达 mission。",
             "single-session 旧启动入口不承诺固定 faction/spawn；canonical 只走 multi-session CreateSession。",
             "A1.5 latest-observation 文件协议是 gRPC 异常回退与取证通道，不是路线切换。",
+            "托管验收窗口枚举器无法抓取 SDL 原生窗口；visible 目视确认需交互式 PowerShell。",
         ],
     }
     result["pass"] = all(checks.values())

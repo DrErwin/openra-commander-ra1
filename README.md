@@ -56,6 +56,28 @@ openra-rl config
 - **Python 3.10+**
 - An LLM endpoint (cloud API key or local model server)
 
+### Phase 1d visible operator (Agenda)
+
+For the project-specific live loop, use the checked-out OpenRA build rather
+than the Docker quick start.  The command starts `OpenRA/bin/OpenRA.exe` with
+`Multi1:agent-normal` and `Multi0:easy`, keeps the bridge connected so the game
+continues ticking, and writes a session-scoped observation/mission directory.
+
+```powershell
+.\.venv\Scripts\python.exe commander\scripts\live_operator.py start
+.\.venv\Scripts\python.exe commander\scripts\live_operator.py observe
+.\.venv\Scripts\python.exe commander\scripts\live_operator.py turn "抢中间偏西的油井"
+.\.venv\Scripts\python.exe commander\scripts\live_operator.py stop
+```
+
+`turn` is only a human smoke-test convenience.  A real Agent connects through
+`live_operator.py mcp` and uses the five semantic Phase 1c tools:
+`read_battlefield`, `get_alerts`, `read_missions`, `issue_mission`, and
+`cancel_mission`.  Run `mcp-config` after `start` to print a Claude/Codex MCP
+stdio configuration.  The single-session visible launcher intentionally does
+not promise fixed faction/spawn; use the multi-session CreateSession path for
+the canonical fixed profile.
+
 ## CLI Reference
 
 ```

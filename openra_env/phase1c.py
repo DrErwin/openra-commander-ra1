@@ -498,7 +498,10 @@ class Phase1cFacade:
         self.aggregator = aggregator or SemanticAggregator(session_id)
         root = runtime_root or os.environ.get("RL_MISSION_DIR") or os.environ.get("RL_OBSERVATION_DIR") or "."
         self.missions = mission_client or MissionClient(session_id, root)
-        if bridge_client is None:
+        # Offline contract/tests may have grpcio installed but no live game.
+        # Only auto-create a network client when the MCP/live environment has
+        # explicitly selected a session; callers can still inject a client.
+        if bridge_client is None and os.environ.get("RL_SESSION_ID"):
             try:
                 from openra_env.server.bridge_client import BridgeClient
                 bridge_client = BridgeClient(session_id=session_id, observation_dir=os.environ.get("RL_OBSERVATION_DIR"))
