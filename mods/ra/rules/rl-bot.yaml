@@ -30,6 +30,14 @@ Player:
 		Type: rl-agent
 		Port: 9999
 		ObservationInterval: 9999
+	# The live operator uses agent-normal so the stock normal bot modules and
+	# the steering/observation conditions are selected together. Keep the
+	# legacy rl-agent entry above for existing headless clients.
+	ExternalBotBridge@AGENTNORMAL:
+		Name: bot-rl-agent.name
+		Type: agent-normal
+		Port: 9999
+		ObservationInterval: 9999
 	ModularBot@DummyAI:
 		Name: Dummy (Passive)
 		Type: dummy

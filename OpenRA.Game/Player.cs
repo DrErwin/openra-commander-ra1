@@ -216,11 +216,17 @@ namespace OpenRA
 			// Enable the bot logic on the host
 			if (IsBot && Game.IsHost)
 			{
-				var logic = PlayerActor.TraitsImplementing<IBot>().FirstOrDefault(b => b.Info.Type == BotType);
-				if (logic == null)
+				// A controlled agent-normal player intentionally has two IBot
+				// traits: ModularBot supplies the stock autonomous normal AI and
+				// ExternalBotBridge supplies observation/steering. Activate every
+				// matching trait so the bridge is not shadowed by ModularBot's
+				// FirstOrDefault selection. Other bot types still have one match.
+				var logics = PlayerActor.TraitsImplementing<IBot>().Where(b => b.Info.Type == BotType).ToArray();
+				if (logics.Length == 0)
 					Log.Write("debug", $"Invalid bot type: {BotType}");
 				else
-					logic.Activate(this);
+					foreach (var logic in logics)
+						logic.Activate(this);
 			}
 
 			unlockRenderPlayer = PlayerActor.TraitsImplementing<IUnlocksRenderPlayer>().ToArray();
