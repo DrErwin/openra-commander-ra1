@@ -102,7 +102,7 @@ namespace OpenRA.Mods.Common.Traits
 			if (disposed)
 				return;
 
-			render.Dispose();
+			render?.Dispose();
 			disposed = true;
 		}
 	}

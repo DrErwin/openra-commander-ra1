@@ -9,6 +9,10 @@
  */
 #endregion
 
+using System.Collections.Generic;
+using System.Threading;
+
+using OpenRA.Support;
 using OpenRA.Traits;
 
 namespace OpenRA.Mods.Common.Traits.Commander
@@ -26,9 +30,14 @@ namespace OpenRA.Mods.Common.Traits.Commander
 		public override object Create(ActorInitializer init) { return new SteeringModule(this); }
 	}
 
-	public sealed class SteeringModule : ConditionalTrait<SteeringModuleInfo>, IBotTick
+	public sealed class SteeringModule : ConditionalTrait<SteeringModuleInfo>, IBotTick, IGameSaveTraitData, INotifyActorDisposing
 	{
 		Player player;
+		MissionCoordinator missionCoordinator;
+
+		// Phase 1 intentionally has no order emission path. The runtime counter
+		// is kept for the Gate evidence and has no incrementing call site.
+		int issuedOrderCount;
 
 		public SteeringModule(SteeringModuleInfo info)
 			: base(info) { }
@@ -36,6 +45,7 @@ namespace OpenRA.Mods.Common.Traits.Commander
 		protected override void TraitEnabled(Actor self)
 		{
 			base.TraitEnabled(self);
+			missionCoordinator = new MissionCoordinator(self);
 			Log.Write("rl-bridge", $"event=steering_enabled player={self.Owner.InternalName} tick={self.World.WorldTick}");
 		}
 
@@ -46,7 +56,22 @@ namespace OpenRA.Mods.Common.Traits.Commander
 				return;
 
 			if (player.World.WorldTick % Info.HeartbeatInterval == 0)
-				Log.Write("rl-bridge", $"event=steering_heartbeat player={player.InternalName} tick={player.World.WorldTick}");
+			{
+				var orderCount = Volatile.Read(ref issuedOrderCount);
+				Log.Write("rl-bridge", $"event=steering_heartbeat player={player.InternalName} "
+					+ $"tick={player.World.WorldTick} steering_order_count={orderCount}");
+			}
+
+			missionCoordinator?.MissionTick(bot, player.World.WorldTick);
 		}
+
+		List<MiniYamlNode> IGameSaveTraitData.IssueTraitData(Actor self) =>
+			missionCoordinator == null ? null : ((IGameSaveTraitData)missionCoordinator).IssueTraitData(self);
+
+		void IGameSaveTraitData.ResolveTraitData(Actor self, MiniYaml data) =>
+			((IGameSaveTraitData)missionCoordinator)?.ResolveTraitData(self, data);
+
+		void INotifyActorDisposing.Disposing(Actor self) =>
+			((INotifyActorDisposing)missionCoordinator)?.Disposing(self);
 	}
 }

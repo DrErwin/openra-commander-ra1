@@ -49,6 +49,7 @@ namespace OpenRA.Mods.Common.Traits
 		static TimeSpan gameOverSessionTtl;
 		static Thread cleanupThread;
 		static bool allowObservationlessSessions;
+		static bool recordReplays;
 		static int testGameOverAfterTicks;
 
 		static int nextClientIndex = 100;
@@ -72,6 +73,7 @@ namespace OpenRA.Mods.Common.Traits
 		{
 			public readonly OrderManager OrderManager;
 			public readonly World World;
+			public readonly ReplayRecorder ReplayRecorder;
 			public readonly DateTime CreatedUtc = DateTime.UtcNow;
 
 			/// <summary>Prevents two concurrent FastAdvance calls from ticking the same World.</summary>
@@ -85,10 +87,11 @@ namespace OpenRA.Mods.Common.Traits
 			readonly CancellationTokenSource continuousCancellation = new();
 			Thread continuousThread;
 
-			public SessionState(OrderManager om, World w)
+			public SessionState(OrderManager om, World w, ReplayRecorder replayRecorder)
 			{
 				OrderManager = om;
 				World = w;
+				ReplayRecorder = replayRecorder;
 			}
 
 			public void StartContinuous(IObservationSession session)
@@ -145,6 +148,8 @@ namespace OpenRA.Mods.Common.Traits
 			gameOverSessionTtl = ReadTtl("RL_SESSION_GAMEOVER_TTL_SECONDS", 30);
 			allowObservationlessSessions = string.Equals(
 				Environment.GetEnvironmentVariable("RL_ALLOW_OBSERVATIONLESS_SESSIONS"), "true", StringComparison.OrdinalIgnoreCase);
+			recordReplays = string.Equals(
+				Environment.GetEnvironmentVariable("RL_RECORD_REPLAYS"), "true", StringComparison.OrdinalIgnoreCase);
 			testGameOverAfterTicks = ReadNonNegativeInt("RL_SESSION_TEST_GAMEOVER_AFTER_TICKS", 0);
 
 			var workerCount = Environment.ProcessorCount;
@@ -337,7 +342,7 @@ namespace OpenRA.Mods.Common.Traits
 				}
 				catch (Exception e)
 				{
-					Log.Write("rl-bridge", $"Error disposing world for {sessionId}: {e.Message}");
+					Log.Write("rl-bridge", $"Error disposing world for {sessionId}: {e}");
 				}
 
 				try
@@ -347,6 +352,15 @@ namespace OpenRA.Mods.Common.Traits
 				catch (Exception e)
 				{
 					Log.Write("rl-bridge", $"Error disposing OrderManager for {sessionId}: {e.Message}");
+				}
+
+				try
+				{
+					state.ReplayRecorder?.Dispose();
+				}
+				catch (Exception e)
+				{
+					Log.Write("rl-bridge", $"Error disposing replay recorder for {sessionId}: {e.Message}");
 				}
 			}
 
@@ -551,12 +565,17 @@ namespace OpenRA.Mods.Common.Traits
 				modData.PrepareMap(map);
 			}
 
+			// Validate before allocating per-session replay/engine resources so an
+			// invalid faction or spawn cannot leak a recorder or OrderManager.
+			ValidateSessionConfiguration(mapPreview, map, playerFaction, enemyFaction, playerSpawn, enemySpawn);
+
 			// 4. Create isolated OrderManager with EchoConnection (no network)
 			// These are per-session objects, safe to create outside the lock.
-			var connection = new EchoConnection();
+			var replayRecorder = recordReplays
+				? new ReplayRecorder(() => Game.TimestampedFilename(extra: $"-{sessionId}-Server"))
+				: null;
+			var connection = new EchoConnection(replayRecorder);
 			var orderManager = new OrderManager(connection);
-
-			ValidateSessionConfiguration(mapPreview, map, playerFaction, enemyFaction, playerSpawn, enemySpawn);
 
 			// 5. Build LobbyInfo with map slots and bot assignments
 			SetupLobbyInfo(orderManager, mapPreview, map, bots, seed, playerFaction, enemyFaction, playerSpawn, enemySpawn);
@@ -583,7 +602,7 @@ namespace OpenRA.Mods.Common.Traits
 			// the bridge becomes visible to gRPC. This prevents a race where
 			// FastAdvance finds the bridge (via WaitForBridge) but SessionStates
 			// hasn't been populated yet, causing NOT_FOUND.
-			SessionStates[sessionId] = new SessionState(orderManager, world);
+			SessionStates[sessionId] = new SessionState(orderManager, world, replayRecorder);
 
 			// 8. Find either the legacy action bridge or the Phase 1 read-only endpoint.
 			ExternalBotBridge bridge = null;

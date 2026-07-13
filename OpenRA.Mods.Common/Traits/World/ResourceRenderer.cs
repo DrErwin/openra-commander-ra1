@@ -258,7 +258,7 @@ namespace OpenRA.Mods.Common.Traits
 				return;
 
 			shadowLayer?.Dispose();
-			spriteLayer.Dispose();
+			spriteLayer?.Dispose();
 
 			ResourceLayer.CellChanged -= AddDirtyCell;
 

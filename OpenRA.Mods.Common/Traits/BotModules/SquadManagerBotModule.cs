@@ -13,6 +13,7 @@ using System;
 using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Linq;
+using OpenRA.Mods.Common.Traits.Commander;
 using OpenRA.Mods.Common.Traits.BotModules.Squads;
 using OpenRA.Primitives;
 using OpenRA.Traits;
@@ -105,7 +106,8 @@ namespace OpenRA.Mods.Common.Traits
 	}
 
 	public class SquadManagerBotModule : ConditionalTrait<SquadManagerBotModuleInfo>,
-		IBotEnabled, IBotTick, IBotRespondToAttack, IBotPositionsUpdated, IGameSaveTraitData, INotifyActorDisposing
+		IBotEnabled, IBotTick, IBotRespondToAttack, IBotPositionsUpdated, IGameSaveTraitData, INotifyActorDisposing,
+		IBotRequestDirectedSquad
 	{
 		public CPos GetRandomBaseCenter()
 		{
@@ -127,6 +129,7 @@ namespace OpenRA.Mods.Common.Traits
 		readonly HashSet<Actor> activeUnits = [];
 
 		public List<Squad> Squads = [];
+		readonly Dictionary<string, Squad> directedSquads = new(StringComparer.Ordinal);
 		readonly Stack<Squad> squadsPendingUpdate = [];
 		readonly ActorIndex.NamesAndTrait<BuildingInfo> constructionYardBuildings;
 
@@ -209,6 +212,81 @@ namespace OpenRA.Mods.Common.Traits
 		void IBotTick.BotTick(IBot bot)
 		{
 			AssignRolesToIdleUnits(bot);
+		}
+
+		LeaseResult IBotRequestDirectedSquad.TryLeaseDirectedSquad(IBot bot, string missionId, Actor target, int requestedUnits)
+		{
+			if (string.IsNullOrWhiteSpace(missionId) || target == null || target.IsDead || !target.IsInWorld)
+				return new LeaseResult { Success = false, Code = "target_lost", Message = "directed squad target is unavailable" };
+
+			if (directedSquads.TryGetValue(missionId, out var existing))
+				return new LeaseResult { Success = existing.IsValid, Code = existing.IsValid ? null : "no_units", Message = "mission already leased", Units = existing.Units.ToArray() };
+
+			var minimumUnits = 3;
+			var maximumUnits = Math.Max(minimumUnits, requestedUnits);
+			var candidates = unitsHangingAroundTheBase
+				.Where(a => !unitCannotBeOrdered(a) && a.TraitsImplementing<AttackBase>().Any())
+				.OrderBy(a => (a.CenterPosition - target.CenterPosition).LengthSquared)
+				.ThenBy(a => a.ActorID)
+				.Take(maximumUnits)
+				.ToList();
+			if (candidates.Count < minimumUnits)
+			{
+				// A normal ModularBot may already have assigned every combat unit
+				// to an autonomous squad. A directed mission is an explicit lease
+				// request, so take the remaining eligible units from those squads
+				// and remove them from autonomous ownership before leasing.
+				var leased = directedSquads.Values.SelectMany(s => s.Units).ToHashSet();
+				var fallback = World.Actors
+					.Where(a => !unitCannotBeOrdered(a) && !leased.Contains(a) && !candidates.Contains(a)
+						&& a.TraitsImplementing<AttackBase>().Any())
+					.OrderBy(a => (a.CenterPosition - target.CenterPosition).LengthSquared)
+					.ThenBy(a => a.ActorID)
+					.Take(maximumUnits - candidates.Count)
+					.ToArray();
+				foreach (var existingSquad in Squads)
+					existingSquad.Units.RemoveWhere(fallback.Contains);
+				candidates.AddRange(fallback);
+			}
+			if (candidates.Count < minimumUnits)
+				return new LeaseResult { Success = false, Code = "no_units", Message = $"at least {minimumUnits} combat units are required" };
+
+			var squad = RegisterNewSquad(bot, SquadType.Assault, (target, WVec.Zero));
+			squad.Units.UnionWith(candidates);
+			unitsHangingAroundTheBase.RemoveAll(a => candidates.Contains(a));
+			activeUnits.UnionWith(candidates);
+			directedSquads[missionId] = squad;
+			foreach (var n in notifyIdleBaseUnits)
+				n.UpdatedIdleBaseUnits(unitsHangingAroundTheBase);
+			Log.Write("rl-bridge", $"event=directed_squad_leased player={Player.InternalName} mission={missionId} units={candidates.Count} target={target.ActorID} tick={World.WorldTick}");
+			return new LeaseResult { Success = true, Units = candidates };
+		}
+
+		void IBotRequestDirectedSquad.ReleaseDirectedSquad(IBot bot, string missionId, string reason)
+		{
+			if (!directedSquads.Remove(missionId, out var squad))
+				return;
+
+			var released = squad.Units.ToArray();
+			foreach (var unit in released.Where(a => !unitCannotBeOrdered(a)))
+				bot.QueueOrder(new Order("Stop", unit, false));
+			activeUnits.ExceptWith(released);
+			squad.Units.Clear();
+			Squads.Remove(squad);
+			foreach (var n in notifyIdleBaseUnits)
+				n.UpdatedIdleBaseUnits(unitsHangingAroundTheBase);
+			Log.Write("rl-bridge", $"event=directed_squad_released player={Player.InternalName} mission={missionId} units={released.Length} reason={reason} tick={World.WorldTick}");
+		}
+
+		DirectedSquadProgress IBotRequestDirectedSquad.GetDirectedSquadProgress(string missionId)
+		{
+			if (!directedSquads.TryGetValue(missionId, out var squad))
+				return null;
+			return new DirectedSquadProgress
+			{
+				Units = squad.Units.Where(a => !unitCannotBeOrdered(a)).ToArray(),
+				TargetAlive = squad.TargetActor != null && squad.TargetActor.IsInWorld && !squad.TargetActor.IsDead,
+			};
 		}
 
 		internal static Actor ClosestTo(IEnumerable<Actor> ownActors, Actor targetActor)

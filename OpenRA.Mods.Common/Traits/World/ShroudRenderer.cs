@@ -382,8 +382,10 @@ namespace OpenRA.Mods.Common.Traits
 			if (disposed)
 				return;
 
-			shroudLayer.Dispose();
-			fogLayer.Dispose();
+			// Headless multi-session worlds skip IWorldLoaded because no
+			// WorldRenderer exists, so these layers may never be allocated.
+			shroudLayer?.Dispose();
+			fogLayer?.Dispose();
 			disposed = true;
 		}
 	}

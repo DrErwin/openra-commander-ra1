@@ -13,6 +13,7 @@ using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using OpenRA.Mods.Common.Traits.Commander;
 using OpenRA.Traits;
 
 namespace OpenRA.Mods.Common.Traits
@@ -48,7 +49,7 @@ namespace OpenRA.Mods.Common.Traits
 	}
 
 	public class UnitBuilderBotModule : ConditionalTrait<UnitBuilderBotModuleInfo>,
-		IBotTick, IBotNotifyIdleBaseUnits, IBotRequestUnitProduction, IGameSaveTraitData, INotifyActorDisposing
+		IBotTick, IBotNotifyIdleBaseUnits, IBotRequestUnitProduction, IBotRequestBuildingProduction, IGameSaveTraitData, INotifyActorDisposing
 	{
 		public const int FeedbackTime = 30; // ticks; = a bit over 1s. must be >= netlag.
 
@@ -100,8 +101,8 @@ namespace OpenRA.Mods.Common.Traits
 				if (buildRequest != null)
 				{
 					queuesByCategory ??= AIUtils.FindQueuesByCategory(player);
-					BuildUnit(bot, buildRequest, queuesByCategory);
-					queuedBuildRequests.Remove(buildRequest);
+					if (BuildUnit(bot, buildRequest, queuesByCategory))
+						queuedBuildRequests.Remove(buildRequest);
 				}
 
 				if (Info.IdleBaseUnitsMaximum <= 0 || Info.IdleBaseUnitsMaximum > idleUnitCount)
@@ -128,13 +129,35 @@ namespace OpenRA.Mods.Common.Traits
 
 		void IBotRequestUnitProduction.RequestUnitProduction(IBot bot, string requestedActor)
 		{
-			queuedBuildRequests.Add(requestedActor);
+			var queuesByCategory = AIUtils.FindQueuesByCategory(player);
+			if (!BuildUnit(bot, requestedActor, queuesByCategory))
+				queuedBuildRequests.Add(requestedActor);
 		}
 
 		int IBotRequestUnitProduction.RequestedProductionCount(IBot bot, string requestedActor)
 		{
 			return queuedBuildRequests.Count(r => r == requestedActor);
 		}
+
+		ProductionRequestResult IBotRequestBuildingProduction.RequestBuilding(IBot bot, string missionId, string actorType, int count)
+		{
+			if (string.IsNullOrWhiteSpace(actorType) || count < 1 || world.Map.Rules.Actors[actorType] == null)
+				return new ProductionRequestResult { Success = false, Code = "no_prereq", Message = $"unknown building actor type '{actorType}'" };
+
+			var queuesByCategory = AIUtils.FindQueuesByCategory(player);
+			var queued = 0;
+			for (var i = 0; i < count; i++)
+				if (BuildUnit(bot, actorType, queuesByCategory))
+					queued++;
+				else
+					queuedBuildRequests.Add(actorType);
+
+			return queued > 0
+				? new ProductionRequestResult { Success = true, Code = null, Message = "building request queued" }
+				: new ProductionRequestResult { Success = false, Code = "no_prereq", Message = "no production queue is currently able to build the requested actor" };
+		}
+
+		void IBotRequestBuildingProduction.CancelBuildingRequest(IBot bot, string missionId) { }
 
 		void BuildRandomUnit(IBot bot, ProductionQueue[] queues)
 		{
@@ -155,20 +178,23 @@ namespace OpenRA.Mods.Common.Traits
 		}
 
 		// In cases where we want to build a specific unit but don't know the queue name (because there's more than one possibility)
-		void BuildUnit(IBot bot, string name, ILookup<string, ProductionQueue> queuesByCategory)
+		bool BuildUnit(IBot bot, string name, ILookup<string, ProductionQueue> queuesByCategory)
 		{
 			var actorInfo = world.Map.Rules.Actors[name];
 			if (actorInfo == null)
-				return;
+				return false;
 
 			var buildableInfo = actorInfo.TraitInfoOrDefault<BuildableInfo>();
 			if (buildableInfo == null)
-				return;
+				return false;
 
 			ProductionQueue queue = null;
 			foreach (var pq in buildableInfo.Queue)
 			{
-				queue = queuesByCategory[pq].FirstOrDefault(q => !q.AllQueued().Any());
+				// External mission production is allowed to append behind the
+				// autonomous queue. Waiting for an empty queue can starve a
+				// mission indefinitely because ModularBot keeps refilling it.
+				queue = queuesByCategory[pq].FirstOrDefault(q => q.BuildableItems().Any(i => i.Name == name));
 				if (queue != null)
 					break;
 			}
@@ -177,7 +203,10 @@ namespace OpenRA.Mods.Common.Traits
 			{
 				bot.QueueOrder(Order.StartProduction(queue.Actor, name, 1));
 				AIUtils.BotDebug("{0} decided to build {1} (external request)", queue.Actor.Owner, name);
+				return true;
 			}
+
+			return false;
 		}
 
 		ActorInfo ChooseRandomUnitToBuild(ProductionQueue queue)

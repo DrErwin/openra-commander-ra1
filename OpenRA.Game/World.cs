@@ -321,6 +321,8 @@ namespace OpenRA
 
 			if (OrderManager.Connection is NetworkConnection nc && nc.Recorder != null)
 				nc.Recorder.Metadata = new ReplayMetadata(gameInfo);
+			else if (OrderManager.Connection is EchoConnection ec && ec.Recorder != null)
+				ec.Recorder.Metadata = new ReplayMetadata(gameInfo);
 		}
 
 		public void PostLoadComplete(WorldRenderer wr)
@@ -619,9 +621,11 @@ namespace OpenRA
 
 			frameEndActions.Clear();
 
-			Game.Sound.StopAudio();
-			Game.Sound.StopVideo();
-			if (IsLoadingGameSave)
+			// Multi-session headless worlds can be created without the global
+			// renderer/sound bootstrap used by the local client.
+			Game.Sound?.StopAudio();
+			Game.Sound?.StopVideo();
+			if (IsLoadingGameSave && Game.Sound != null)
 				Game.Sound.DisableAllSounds = false;
 
 			// Dispose newer actors first, and the world actor last

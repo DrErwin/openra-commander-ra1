@@ -13,6 +13,7 @@ using System;
 using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Linq;
+using OpenRA.Mods.Common.Traits.Commander;
 using OpenRA.Traits;
 
 namespace OpenRA.Mods.Common.Traits
@@ -45,16 +46,18 @@ namespace OpenRA.Mods.Common.Traits
 		public override object Create(ActorInitializer init) { return new CaptureManagerBotModule(init.Self, this); }
 	}
 
-	public class CaptureManagerBotModule : ConditionalTrait<CaptureManagerBotModuleInfo>, IBotTick, INotifyActorDisposing
+	public class CaptureManagerBotModule : ConditionalTrait<CaptureManagerBotModuleInfo>, IBotTick, INotifyActorDisposing, IBotRequestCaptureMission
 	{
 		readonly World world;
 		readonly Player player;
 		readonly Predicate<Actor> unitCannotBeOrderedOrIsIdle;
+		readonly Predicate<Actor> unitCannotBeOrdered;
 		readonly int maximumCaptureTargetOptions;
 		int minCaptureDelayTicks;
 
 		// Units that the bot already knows about and has given a capture order. Any unit not on this list needs to be given a new order.
 		readonly List<Actor> activeCapturers = [];
+		readonly Dictionary<string, (List<Actor> Units, Actor Target)> directedCapturers = new(StringComparer.Ordinal);
 
 		readonly ActorIndex.OwnerAndNamesAndTrait<CapturesInfo> capturingActors;
 
@@ -68,6 +71,7 @@ namespace OpenRA.Mods.Common.Traits
 				return;
 
 			unitCannotBeOrderedOrIsIdle = a => a.Owner != player || a.IsDead || !a.IsInWorld || a.IsIdle;
+			unitCannotBeOrdered = a => a.Owner != player || a.IsDead || !a.IsInWorld;
 
 			maximumCaptureTargetOptions = Math.Max(1, Info.MaximumCaptureTargetOptions);
 
@@ -87,6 +91,85 @@ namespace OpenRA.Mods.Common.Traits
 				minCaptureDelayTicks = Info.MinimumCaptureDelay;
 				QueueCaptureOrders(bot);
 			}
+		}
+
+		CaptureRequestResult IBotRequestCaptureMission.RequestCapture(IBot bot, string missionId, Actor target, string capturerType, int escortUnits)
+		{
+			if (target == null || target.IsDead || !target.IsInWorld)
+				return new CaptureRequestResult { Success = false, Code = "target_lost", Message = "capture target is unavailable" };
+			if (directedCapturers.TryGetValue(missionId, out var existing))
+			{
+				var usable = existing.Units.Where(a => !unitCannotBeOrdered(a)).ToArray();
+				if (usable.Length > 0)
+					return new CaptureRequestResult { Success = true, Units = usable };
+				// A directed lease is not allowed to pin a mission forever after
+				// its capturer dies. Remove the stale lease so arbitration can
+				// reacquire a replacement engineer on the next tick.
+				directedCapturers.Remove(missionId);
+				activeCapturers.RemoveAll(a => existing.Units.Contains(a));
+			}
+
+			var targetManager = target.TraitOrDefault<CaptureManager>();
+			if (targetManager == null)
+				return new CaptureRequestResult { Success = false, Code = "target_lost", Message = "target is not capturable" };
+
+			var capturer = capturingActors.Actors
+				.Where(a => !unitCannotBeOrdered(a) && a.IsIdle && (string.IsNullOrEmpty(capturerType) || string.Equals(a.Info.Name, capturerType, StringComparison.OrdinalIgnoreCase)))
+				.Select(a => (Actor: a, Manager: a.TraitOrDefault<CaptureManager>()))
+				.Where(x => x.Manager != null && x.Manager.CanTarget(targetManager))
+				.OrderBy(x => (x.Actor.CenterPosition - target.CenterPosition).LengthSquared)
+				.ThenBy(x => x.Actor.ActorID)
+				.Select(x => x.Actor)
+				.FirstOrDefault();
+			if (capturer == null)
+				return new CaptureRequestResult { Success = false, Code = "no_units", Message = "no idle capturer is available" };
+
+			bot.QueueOrder(new Order("CaptureActor", capturer, Target.FromActor(target), false));
+			var units = new List<Actor> { capturer };
+			var escorts = Math.Max(0, escortUnits) == 0
+				? Array.Empty<Actor>()
+				: world.Actors
+					.Where(a => a.Owner == player && !unitCannotBeOrdered(a)
+						&& !ReferenceEquals(a, capturer) && !activeCapturers.Contains(a)
+						&& a.Info.HasTraitInfo<AttackBaseInfo>())
+					.OrderBy(a => (a.CenterPosition - capturer.CenterPosition).LengthSquared)
+					.ThenBy(a => a.ActorID)
+					.Take(escortUnits)
+					.ToArray();
+			foreach (var escort in escorts)
+			{
+				if (escort.AcceptsOrder("Guard"))
+					bot.QueueOrder(new Order("Guard", escort, Target.FromActor(capturer), false));
+				else
+					bot.QueueOrder(new Order("Move", escort, Target.FromCell(world, world.Map.CellContaining(capturer.CenterPosition)), false));
+				units.Add(escort);
+			}
+			activeCapturers.AddRange(units);
+			directedCapturers[missionId] = (units, target);
+			Log.Write("rl-bridge", $"event=capture_requested player={player.InternalName} mission={missionId} capturer={capturer.ActorID} escorts={escorts.Length} target={target.ActorID} tick={world.WorldTick}");
+			return new CaptureRequestResult { Success = true, Units = units };
+		}
+
+		CaptureProgress IBotRequestCaptureMission.GetCaptureProgress(string missionId)
+		{
+			if (!directedCapturers.TryGetValue(missionId, out var directed))
+				return null;
+			return new CaptureProgress
+			{
+				Units = directed.Units.Where(a => !unitCannotBeOrdered(a)).ToArray(),
+				TargetAlive = directed.Target != null && directed.Target.IsInWorld && !directed.Target.IsDead,
+				TargetOwnedByRequester = directed.Target != null && directed.Target.IsInWorld && !directed.Target.IsDead && directed.Target.Owner == player,
+			};
+		}
+
+		void IBotRequestCaptureMission.CancelCapture(IBot bot, string missionId)
+		{
+			if (!directedCapturers.Remove(missionId, out var directed))
+				return;
+			foreach (var unit in directed.Units.Where(a => !unitCannotBeOrdered(a)))
+				bot.QueueOrder(new Order("Stop", unit, false));
+			activeCapturers.RemoveAll(a => directed.Units.Contains(a));
+			Log.Write("rl-bridge", $"event=capture_released player={player.InternalName} mission={missionId} units={directed.Units.Count} tick={world.WorldTick}");
 		}
 
 		IEnumerable<Actor> GetVisibleActorsBelongingToPlayer(Player owner)

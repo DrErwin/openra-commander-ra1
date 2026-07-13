@@ -250,7 +250,8 @@ namespace OpenRA.Mods.Common.Traits
 			if (currentSong != null)
 				Game.Sound.StopMusic();
 
-			Game.Sound.DisableWorldSounds = false;
+			if (Game.Sound != null)
+				Game.Sound.DisableWorldSounds = false;
 		}
 	}
 }

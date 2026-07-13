@@ -18,6 +18,13 @@ Player:
 		RequiresCondition: enable-agent-steering
 		Port: 9999
 		ObservationInterval: 10
+	EngineEventDetector:
+		RequiresCondition: enable-agent-steering
+	CaptureManagerBotModule@agent-mission:
+		RequiresCondition: enable-agent-steering
+		CapturingActorTypes: e6
+		CapturableActorTypes: oilb, hosp, tech, atek, stek
+		MinimumCaptureDelay: 375
 	ExternalBotBridge@RLAGENT:
 		Name: bot-rl-agent.name
 		Type: rl-agent

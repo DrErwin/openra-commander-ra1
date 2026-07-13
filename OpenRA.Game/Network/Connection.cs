@@ -42,10 +42,16 @@ namespace OpenRA.Network
 	public sealed class EchoConnection : IConnection
 	{
 		const int LocalClientId = 1;
+		public ReplayRecorder Recorder { get; }
 		readonly Queue<(int Frame, int SyncHash, ulong DefeatState)> sync = [];
 		readonly Queue<(int Frame, OrderPacket Orders)> orders = [];
 		readonly Queue<OrderPacket> immediateOrders = [];
 		bool disposed;
+
+		public EchoConnection(ReplayRecorder recorder = null)
+		{
+			Recorder = recorder;
+		}
 
 		int IConnection.LocalClientId => LocalClientId;
 
@@ -53,6 +59,9 @@ namespace OpenRA.Network
 		{
 			// Inject an empty frame to fill the gap we are making by projecting forward orders
 			orders.Enqueue((0, new OrderPacket([])));
+			// An optional recorder needs a StartGame marker to flush its pre-start
+			// buffer into a replay file. This marker is recorder-only.
+			Recorder?.Receive(LocalClientId, new OrderPacket([new Order("StartGame", null, false)]).Serialize(0));
 		}
 
 		void IConnection.Send(int frame, IEnumerable<Order> o)
@@ -75,6 +84,7 @@ namespace OpenRA.Network
 			while (immediateOrders.TryDequeue(out var i))
 			{
 				orderManager.ReceiveImmediateOrders(LocalClientId, i);
+				Recorder?.Receive(LocalClientId, i.Serialize(0));
 
 				// An immediate order may trigger a chain of actions that disposes the OrderManager and connection.
 				// Bail out to avoid potential problems from acting on disposed objects.
@@ -84,15 +94,22 @@ namespace OpenRA.Network
 
 			// Project orders forward to the next frame
 			while (orders.TryDequeue(out var o))
+			{
 				orderManager.ReceiveOrders(LocalClientId, (o.Frame + 1, o.Orders));
+				Recorder?.Receive(LocalClientId, o.Orders.Serialize(o.Frame));
+			}
 
 			while (sync.TryDequeue(out var s))
+			{
 				orderManager.ReceiveSync(s);
+				Recorder?.Receive(LocalClientId, OrderIO.SerializeSync(s));
+			}
 		}
 
 		void IDisposable.Dispose()
 		{
 			disposed = true;
+			Recorder?.Dispose();
 		}
 	}
 
