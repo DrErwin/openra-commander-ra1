@@ -24,6 +24,7 @@ dependencies = [
 [project.scripts]
 openra-rl = "openra_env.cli.main:main"
 openra-rl-mcp = "openra_env.mcp_server:main"
+openra-rl-phase1c-mcp = "openra_env.phase1c_mcp:main"
 
 [project.optional-dependencies]
 dev = [

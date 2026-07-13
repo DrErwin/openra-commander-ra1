@@ -2,16 +2,17 @@
 
 本目录存放 OpenRACommander 项目自己的 Python 工具与运行产物。上游 OpenRA-RL 的 Python 工程仍在仓库根目录 `openra_env/`，引擎源码在 `OpenRA/`；本目录**不复制**上游代码，只放我们新增的脚本、测试和运行时文件，并随项目阶段累积。
 
-新增的 C# 扩展在 `OpenRA/OpenRA.Mods.Common/Traits/Player/Commander/`（Steering / Observation / session / file store）。
+新增的 C# 扩展在 `OpenRA/OpenRA.Mods.Common/Traits/Player/Commander/`（Steering / Observation / session / file store / Mission Control）；mission request 实现在 `BotModules/`。
 
 ## 目录约定
 
-- `scripts/`：回归与基线测试入口。当前为 `regression.py`（5-seed canonical 回归）与 `baseline.py`（normal vs agent-normal tick 速率对比）。
-- `tests/`：静态契约测试。当前为 `test_contract.py`（proto 镜像、observation envelope schema、agent-normal 模块隔离、Steering 无下单接口、Python 语法）。
+- `scripts/`：回归与基线测试入口。除 1a 脚本外，`mission_gate.py` 运行 canonical 180 秒 attack→capture→cancel 闭环，`mission_regression.py` 运行 5 个固定 seed；设置 `RL_RECORD_REPLAYS=true` 时仍按 session 独立写 replay。自然整局 replay 是后续增强证据，不阻塞 bounded 1a/1b 验收。
+- `tests/`：静态契约测试。`test_contract.py` 覆盖 schema/YAML/Steering，`test_mission_control.py` 覆盖 mission JSONL、session、torn tail、lease/save-load surface。
+- 1c 语义面：`openra_env/phase1c.py` 和 `openra_env/phase1c_mcp.py` 只对 Agent 暴露 `read_battlefield`、`get_alerts`、`read_missions`、`issue_mission`、`cancel_mission` 五个工具；`commander/scripts/phase1c_gate.py` 默认运行离线契约 fixture，`--live` 用于连接真实 daemon。
 - `evidence/`：本地运行日志与临时证据（gitignored，不入库）。
 - `runtime/`：运行时 fallback 文件目录（gitignored）。
 
-正式 JSON 证据按**阶段**归档到 `D:\Agent RA2\document\evidence\phase1a\`（phase1a 阶段产物），不放在本目录——证据是一次性归档产物，按阶段命名合理。
+正式 JSON 证据按**阶段**归档到 `D:\Agent RA2\document\evidence\phase1a\`、`D:\Agent RA2\document\evidence\phase1b\`，不放在本目录——证据是一次性归档产物，按阶段命名合理。
 
 ## 边界
 

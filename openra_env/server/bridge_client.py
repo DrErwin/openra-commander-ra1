@@ -200,6 +200,40 @@ class BridgeClient:
             raise ObservationFallbackError("unavailable", f"fallback snapshot not found for session {sid}")
         raise ObservationFallbackError("inconsistent_snapshot", f"could not read a consistent snapshot: {last_error}")
 
+    def read_observation(self, session_id: str = "", timeout_s: float = 5.0) -> ObservationReadResult:
+        """Read one observation over gRPC, falling back to the A1.5 snapshot.
+
+        ``StreamObservations`` is a short-lived observer here: obtaining one
+        frame immediately closes the iterator, so a disconnect cannot stop
+        the game.  This keeps gRPC the preferred channel while making the
+        latest-file path a deterministic recovery mechanism.
+        """
+        sid = session_id or self.session_id
+        if not self._connected:
+            self.connect()
+        try:
+            stream = self._stub.StreamObservations(
+                rl_bridge_pb2.StateRequest(session_id=sid), timeout=max(0.1, timeout_s)
+            )
+            observation = next(stream)
+            # This façade consumes a single frame per MCP read. Explicitly
+            # close the short-lived observer so the game never retains a
+            # transport lease after the tool call returns.
+            try:
+                stream.cancel()
+            except Exception:
+                pass
+            return ObservationReadResult(
+                observation=observation,
+                sequence=int(observation.observation_sequence),
+                observed_at_unix_ms=int(observation.observed_at_unix_ms),
+                stale=max(0, int(time.time() * 1000) - int(observation.observed_at_unix_ms)) > 2000,
+                source="grpc",
+            )
+        except (grpc.RpcError, StopIteration, RuntimeError) as exc:
+            logger.warning("gRPC observation unavailable for %s; using latest snapshot: %s", sid, exc)
+            return self.read_latest_observation(sid)
+
     @property
     def session_started(self) -> bool:
         """Always False — no streaming session in sync mode."""

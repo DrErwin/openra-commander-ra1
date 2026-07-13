@@ -21,4 +21,5 @@ documents/
 /commander/runtime/
 /commander/evidence/*.log
 /commander/evidence/*.err
+/commander/evidence/*.json
 /commander/**/__pycache__/
