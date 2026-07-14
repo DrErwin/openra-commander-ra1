@@ -216,6 +216,7 @@ namespace OpenRA
 			// Enable the bot logic on the host
 			if (IsBot && Game.IsHost)
 			{
+				Log.Write("rl-bridge", $"player_created name={InternalName} bot={BotType} is_bot={IsBot} playable={Playable}");
 				// A controlled agent-normal player intentionally has two IBot
 				// traits: ModularBot supplies the stock autonomous normal AI and
 				// ExternalBotBridge supplies observation/steering. Activate every
