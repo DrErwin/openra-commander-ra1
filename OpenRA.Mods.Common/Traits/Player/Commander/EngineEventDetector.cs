@@ -32,8 +32,8 @@ namespace OpenRA.Mods.Common.Traits.Commander
 	public sealed class EngineEventDetector : ConditionalTrait<EngineEventDetectorInfo>, ITick, INotifyActorDisposing
 	{
 		readonly World world;
-		readonly string sessionId;
-		readonly string eventPath;
+		string sessionId;
+		string eventPath;
 		readonly Player player;
 		readonly HashSet<uint> previousOwnActors = new();
 		readonly HashSet<uint> previousOwnBuildings = new();
@@ -50,20 +50,35 @@ namespace OpenRA.Mods.Common.Traits.Commander
 		{
 			world = init.World;
 			player = init.Self.Owner;
-			sessionId = player.PlayerActor.TraitOrDefault<ObservationTrait>()?.SessionId
-				?? Environment.GetEnvironmentVariable("RL_SESSION_ID")
-				?? string.Empty;
+			// PlayerActor is assigned only after all player traits have been
+			// constructed. Resolve the observation session lazily instead of
+			// dereferencing player.PlayerActor during construction.
+			sessionId = Environment.GetEnvironmentVariable("RL_SESSION_ID") ?? string.Empty;
+			eventPath = string.Empty;
+		}
+
+		void EnsureEventPath()
+		{
+			if (!string.IsNullOrEmpty(eventPath))
+				return;
+
+			var observation = player?.PlayerActor?.TraitOrDefault<ObservationTrait>()
+				?? ObservationSessionRegistry.Lookup(string.Empty) as ObservationTrait;
+			if (observation != null)
+				sessionId = observation.SessionId;
+			if (string.IsNullOrWhiteSpace(sessionId))
+				return;
+
 			var configuredRoot = Environment.GetEnvironmentVariable("RL_EVENT_DIR")
 				?? Environment.GetEnvironmentVariable("RL_OBSERVATION_DIR");
 			if (string.IsNullOrWhiteSpace(configuredRoot))
 				configuredRoot = Path.Combine(Platform.SupportDir, "RLBridge", "runtime");
-			eventPath = string.IsNullOrWhiteSpace(sessionId)
-				? string.Empty
-				: Path.Combine(Path.GetFullPath(configuredRoot), sessionId, "low-level-events.jsonl");
+			eventPath = Path.Combine(Path.GetFullPath(configuredRoot), sessionId, "low-level-events.jsonl");
 		}
 
 		void ITick.Tick(Actor self)
 		{
+			EnsureEventPath();
 			if (disposed || IsTraitDisabled || string.IsNullOrEmpty(eventPath) || world.IsLoadingGameSave || world.WorldTick % 10 != 0)
 				return;
 
@@ -90,7 +105,10 @@ namespace OpenRA.Mods.Common.Traits.Commander
 							production[(uint)actor.ActorID] = item.Item;
 					}
 				}
-				else if (!actor.Owner.NonCombatant && player.Shroud.IsVisible(actor.CenterPosition))
+				// Some maps/launch paths do not have the player's shroud trait ready
+				// during the first observation heartbeat. Event detection is optional
+				// telemetry and must never terminate the game loop in that window.
+				else if (!actor.Owner.NonCombatant && player.Shroud != null && actor.OccupiesSpace != null && player.Shroud.IsVisible(actor.CenterPosition))
 				{
 					if (actor.Info.HasTraitInfo<BuildingInfo>()) visibleEnemyBuildings.Add((uint)actor.ActorID);
 					else visibleEnemies.Add((uint)actor.ActorID);
