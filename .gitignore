@@ -23,3 +23,5 @@ documents/
 /commander/evidence/*.err
 /commander/evidence/*.json
 /commander/**/__pycache__/
+# Optional locally-built vanilla runtime; never resolve this from work/.
+/vendor/openra-official/

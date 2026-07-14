@@ -78,6 +78,10 @@ stdio configuration.  The single-session visible launcher intentionally does
 not promise fixed faction/spawn; use the multi-session CreateSession path for
 the canonical fixed profile.
 
+Windows 上原版运行时、项目版可见游戏、实时控制链路、dashboard、noVNC/TightVNC
+以及各进程的检查和停止方法，见
+[`document/phase1d-operator-guide.md`](../document/phase1d-operator-guide.md)。
+
 ## CLI Reference
 
 ```

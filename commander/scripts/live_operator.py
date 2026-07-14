@@ -165,6 +165,22 @@ def _supervisor(args: argparse.Namespace) -> int:
     # observation and mission protocol.
     support_root = runtime_root / "openra-user"
     support_root.mkdir(parents=True, exist_ok=True)
+    # A previous headless run can leave ``Game: Platform: Null`` in the
+    # shared support directory.  If a visible run reuses that directory,
+    # OpenRA starts successfully but creates no desktop window, so VNC only
+    # shows the user's existing desktop.  Remove that stale two-line block
+    # for visible sessions; headless sessions keep their explicit setting.
+    if not args.headless:
+        settings_path = support_root / "settings.yaml"
+        if settings_path.exists():
+            settings_text = settings_path.read_text(encoding="utf-8")
+            cleaned = re.sub(
+                r"(?m)^Game:\r?\n\tPlatform:\s*Null\r?\n(?:\r?\n)?",
+                "",
+                settings_text,
+            )
+            if cleaned != settings_text:
+                settings_path.write_text(cleaned, encoding="utf-8")
     os.environ["APPDATA"] = str(support_root)
     os.environ["LOCALAPPDATA"] = str(support_root)
 

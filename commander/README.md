@@ -13,10 +13,11 @@
 - 1d 页面只读取 `/api/state`，不发 mission；任务仍由 MCP 五工具和 C# engine-owned 文件协议处理。
 - `evidence/`：本地运行日志与临时证据（gitignored，不入库）。
 - `runtime/`：运行时 fallback 文件目录（gitignored）。
+- `vendor/openra-official/`：项目自有的未修改 OpenRA 可执行运行时（本地构建产物）。启动原版红警请运行 `powershell -ExecutionPolicy Bypass -File commander/scripts/start_official_openra.ps1`；该脚本不会读取外部参考仓库。
 
 正式 JSON 证据按**阶段**归档到 `D:\Agent RA2\document\evidence\phase1a\`、`D:\Agent RA2\document\evidence\phase1b\`，不放在本目录——证据是一次性归档产物，按阶段命名合理。
 
 ## 边界
 
 - 对上游基线文件的**修改**不复制到本目录（避免两份会漂移的源码），逐项记录在 `D:\Agent RA2\document\phase-file-change-log.md`。
-- 对照基线（干净 upstream）在 `D:\Agent RA2\work\OpenRA-RL`，仅用于对比回归，不属于本实现 clone。
+- 干净 upstream 基线仅用于对比回归；它不是本实现的运行时依赖。运行时只使用本项目内的 `OpenRA/` 或 `vendor/openra-official/`。

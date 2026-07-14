@@ -40,13 +40,20 @@
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const statusClass = (v) => String(v || '').toLowerCase().replace(/[^a-z]+/g,'-');
     function renderGame(state){
-      const url = state.viewer?.novnc_url;
+      const url = state.viewer?.novnc_url || '';
+      const frame = $('game-frame');
+      const iframe = frame.querySelector('iframe');
       $('viewer-mode').textContent = `viewer: ${url ? 'noVNC' : 'replay/fallback'}`;
-      if(url) $('game-frame').innerHTML = `<iframe title="OpenRA noVNC viewer" src="${esc(url)}"></iframe>`;
-      else {
+      // The page polls /api/state every 3 seconds. Do not replace an existing
+      // noVNC iframe on every poll: replacing it drops the VNC socket and
+      // causes the client to ask for the password again.
+      if(url) {
+        if(!iframe || iframe.getAttribute('src') !== url)
+          frame.innerHTML = `<iframe title="OpenRA noVNC viewer" src="${esc(url)}"></iframe>`;
+      } else if(iframe || !frame.querySelector('.game-fallback')) {
         const zones = Object.keys(state.battlefield?.map?.zones || {});
         const contested = new Set(state.battlefield?.map?.contested_zones || []);
-        $('game-frame').innerHTML = `<div class="game-fallback"><div class="game-message"><strong>Replay / headless viewer fallback</strong><div>noVNC URL 未配置。当前展示仍使用 canonical observation、POI、任务和审计时间线；配置 <code>--novnc-url</code> 后此面板会嵌入实时/回放画面。</div><div class="map-card">${zones.map(z => `<div class="zone ${contested.has(z)?'hot':''}">${esc(z)}</div>`).join('')}</div></div></div>`;
+        frame.innerHTML = `<div class="game-fallback"><div class="game-message"><strong>Replay / headless viewer fallback</strong><div>noVNC URL 未配置。当前展示仍使用 canonical observation、POI、任务和审计时间线；配置 <code>--novnc-url</code> 后此面板会嵌入实时/回放画面。</div><div class="map-card">${zones.map(z => `<div class="zone ${contested.has(z)?'hot':''}">${esc(z)}</div>`).join('')}</div></div></div>`;
       }
       const bf=state.battlefield||{}; $('tick').textContent=`tick ${bf.tick ?? '—'}`; $('map-label').textContent=`${bf.map?.name || 'Agenda'} ${bf.map?.width||''}×${bf.map?.height||''}`; $('profile-label').textContent=`seed ${state.canonical?.seed ?? '—'} · ${state.canonical?.player || ''}`; $('fresh-label').textContent=`${bf.stale ? 'STALE' : 'fresh'} · schema ${bf.schema_version ?? 1}`;
     }
