@@ -67,9 +67,19 @@ def _imports():
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(temp, path)
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        temp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        for attempt in range(10):
+            try:
+                os.replace(temp, path)
+                return
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.05)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _read_json(path: Path = METADATA_PATH) -> dict[str, Any]:
@@ -343,7 +353,6 @@ def _status(_: argparse.Namespace) -> int:
             state = bridge.get_state()
             metadata.update({"status": state.phase, "tick": int(state.tick), "player_faction": state.player_faction,
                              "enemy_faction": state.enemy_faction, "player_spawn": int(state.player_spawn), "enemy_spawn": int(state.enemy_spawn)})
-            _write_json(METADATA_PATH, metadata)
         finally:
             bridge.close()
     except Exception as exc:

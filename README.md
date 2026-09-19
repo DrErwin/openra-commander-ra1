@@ -1,615 +1,151 @@
 <p align="center">
-  <a href="https://openra-rl.dev">
-    <img src="docs/banner.png" alt="OpenRA-RL — Command AI To Play Red Alert" width="100%">
-  </a>
+  <img src="docs/banner.png" alt="OpenRA Commander — Command AI to play Red Alert" width="100%">
 </p>
+
+<h1 align="center">OpenRA Commander</h1>
 
 <p align="center">
-  <b>Play <a href="https://www.openra.net/">Red Alert</a> with AI agents. LLMs, scripted bots, or RL — your agent commands armies in the classic RTS through a Python API.</b>
+  让 Codex、Claude 等 AI 读懂《红色警戒 1》的战场，并像指挥官一样向游戏内 Bot 下达战术任务。
 </p>
 
-<p align="center">
-  <a href="https://pypi.org/project/openra-rl/"><img src="https://img.shields.io/pypi/v/openra-rl?color=red" alt="PyPI"></a>
-  <a href="https://pypi.org/project/openra-rl/"><img src="https://img.shields.io/pypi/pyversions/openra-rl" alt="Python"></a>
-  <a href="https://github.com/yxc20089/OpenRA-RL/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/yxc20089/OpenRA-RL/ci.yml?label=tests" alt="CI"></a>
-  <a href="https://github.com/yxc20089/OpenRA-RL/blob/main/LICENSE"><img src="https://img.shields.io/github/license/yxc20089/OpenRA-RL" alt="License"></a>
-</p>
+> [!IMPORTANT]
+> 这是 **RA1（Red Alert）** 项目，不是 RA2 模组。当前版本面向 Windows，使用仓库内修改过的 OpenRA 引擎。
 
-<p align="center">
-  <a href="https://openra-rl.dev">Website</a> &bull;
-  <a href="https://huggingface.co/spaces/openra-rl/OpenRA-Bench">Leaderboard</a> &bull;
-  <a href="https://huggingface.co/spaces/openra-rl/OpenRA-RL">HuggingFace</a> &bull;
-  <a href="https://openra-rl.dev/docs/intro">Docs</a> &bull;
-  <a href="https://github.com/yxc20089/OpenRA-RL/issues">Issues</a>
-</p>
+## 这个项目用了什么框架？
 
----
+它不是让 AI 看屏幕、模拟鼠标点击，而是把游戏改造成一套 AI 能理解和操作的“工具”。核心底座是 [OpenRA](https://www.openra.net/) 和 [OpenRA-RL](https://github.com/yxc20089/OpenRA-RL)，再通过 MCP 把这些能力交给外部 AI 客户端。
 
-## Quick Start
+| 层 | 使用的框架或技术 | 在项目里的作用 |
+| --- | --- | --- |
+| 游戏层 | **OpenRA（C#）** | 运行 RA1 战场、单位、经济和原生 Bot；本项目在引擎内增加观测与任务控制模块。 |
+| AI 环境层 | **OpenRA-RL（Python）** | 提供连接 OpenRA 的基础代码、数据模型和进程管理能力，是本项目的上游框架。 |
+| 游戏通信 | **gRPC + Protocol Buffers** | 把金钱、单位、敌情、地图和游戏进度等结构化状态从 OpenRA 传给 Python。 |
+| AI 工具接口 | **MCP（Model Context Protocol）** | 把“读战场、看告警、下任务”等能力注册成 Codex、Claude 可以调用的工具。 |
+| 战术控制 | **OpenRACommander Mission Control** | 将 AI 的自然语言意图变成 `attack`、`capture`、`produce`、`build` 等任务，并跟踪执行状态。 |
 
-```bash
-pip install openra-rl
-openra-rl play
+简单说：**OpenRA 负责运行游戏，OpenRA-RL 负责连接游戏，MCP 负责把游戏能力交给 AI，OpenRACommander 负责把 AI 的战术任务安全地交给 Bot 执行。**
+
+## AI 是怎样玩 RA1 的？
+
+```mermaid
+flowchart LR
+    H[玩家的自然语言要求] --> A[Codex / Claude 等 AI]
+    A -->|调用 5 个 MCP 工具| P[Python 语义控制层]
+    P -->|任务事件| M[C# Mission Control]
+    M --> B[agent-normal Bot]
+    B --> W[OpenRA / RA1 战场]
+    W -->|gRPC 结构化观测| P
+    P -->|战场摘要、告警、任务状态| A
 ```
 
-On first run, an interactive wizard helps you configure your LLM provider (OpenRouter, Ollama, or LM Studio). The CLI pulls the game server Docker image and starts everything automatically.
+AI 扮演的是“指挥官”，游戏内 `agent-normal` Bot 扮演“执行部队”：
 
-### Skip the wizard
+- AI 判断当前局势，决定进攻哪里、占领哪个目标或先生产什么。
+- Bot 负责采矿、建造、编队、寻路和具体单位操作。
+- AI 暂时断开时，Bot 仍会继续经营和战斗，不会让整局游戏停住。
+- AI 看到的是带语义的战场摘要，而不是内部单位编号或原始画面像素。
 
-```bash
-# Cloud (OpenRouter)
-openra-rl play --provider openrouter --api-key sk-or-... --model anthropic/claude-sonnet-4-20250514
+例如，你可以直接说：
 
-# Local (Ollama — free, no API key)
-openra-rl play --provider ollama --model qwen3:32b
+> 先读取战场，组织部队占领中间偏西的油井；如果没有工程师就先生产一个，再继续执行。
 
-# Developer mode (skip Docker, run server locally)
-openra-rl play --local --provider ollama --model qwen3:32b
+## 当前能力
 
-# Reconfigure later
-openra-rl config
-```
+- 启动一个可见的 RA1 对局，默认地图为 `Agenda`。
+- 读取经济、兵力、建筑、可见敌人、地图区域和关键据点。
+- 接收低电力、资源紧张、区域威胁等战场告警。
+- 下达进攻、占领、生产和建造任务。
+- 查询任务的 `accepted`、`blocked`、`in_progress`、`succeeded` 或 `failed` 状态。
+- 取消任务，并保留任务审计与回放对照数据。
 
-### Prerequisites
+## 快速开始
 
-- **Docker** — the game server runs in a container
-- **Python 3.10+**
-- An LLM endpoint (cloud API key or local model server)
+### 准备条件
 
-### Phase 1d visible operator (Agenda)
+- Windows 10 或 Windows 11
+- Git for Windows
+- Python 3.10 或更高版本
+- .NET 8 SDK
+- 支持 MCP 的 AI 客户端，例如 Codex 或 Claude
 
-For the project-specific live loop, use the checked-out OpenRA build rather
-than the Docker quick start.  The command starts `OpenRA/bin/OpenRA.exe` with
-`Multi1:agent-normal` and `Multi0:easy`, keeps the bridge connected so the game
-continues ticking, and writes a session-scoped observation/mission directory.
+### 1. 克隆并安装
 
 ```powershell
-.\.venv\Scripts\python.exe commander\scripts\live_operator.py start
+git clone --recurse-submodules https://github.com/DrErwin/openra-commander-ra1.git
+cd openra-commander-ra1
+powershell -ExecutionPolicy Bypass -File .\setup-ra1.ps1
+```
+
+安装脚本会准备 Python 虚拟环境、安装控制端依赖，并编译本项目固定的 OpenRA RA1 引擎。首次安装需要联网下载依赖。
+
+### 2. 启动游戏
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\play-ra1.ps1
+```
+
+游戏启动后，终端会打印当前会话专用的 MCP 配置。把这段配置加入 AI 客户端，即可让 AI 读取战场并下达任务。
+
+无桌面的测试环境可以使用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\play-ra1.ps1 -Headless
+```
+
+### 3. 停止游戏
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\stop-ra1.ps1
+```
+
+更完整的安装和操作说明见 [RA1-QUICKSTART.md](RA1-QUICKSTART.md)。
+
+## AI 可以调用的工具
+
+本项目只向 AI 暴露五个高层工具，避免让模型处理几十个零散的单位控制指令。
+
+| 工具 | 用途 |
+| --- | --- |
+| `read_battlefield` | 读取当前经济、部队、敌情、地图区域和关键据点。 |
+| `get_alerts` | 获取低电力、敌军威胁、占领机会等重要提醒。 |
+| `read_missions` | 查询当前与历史任务的执行状态。 |
+| `issue_mission` | 下达进攻、占领、生产或建造任务。 |
+| `cancel_mission` | 取消指定任务。 |
+
+> [!NOTE]
+> MCP 只负责连接 AI 与游戏，不绑定某一家模型。只要客户端支持 MCP，就可以在同一套游戏接口上更换不同 AI。
+
+## 项目结构
+
+```text
+openra-commander/
+├── OpenRA/                 # 修改过的 OpenRA 引擎与 C# 游戏内控制模块
+├── openra_env/             # OpenRA-RL Python 层、gRPC 客户端和 MCP 服务
+├── commander/              # 本项目的运行器、测试、演示与运行时数据
+├── proto/                  # gRPC / Protocol Buffers 协议定义
+├── setup-ra1.ps1           # 安装与编译
+├── play-ra1.ps1            # 启动可见或无界面游戏
+└── stop-ra1.ps1            # 停止当前游戏会话
+```
+
+## 常用检查
+
+```powershell
+# 查看游戏与监督进程状态
+.\.venv\Scripts\python.exe commander\scripts\live_operator.py status
+
+# 查看 AI 当前能读到的战场、告警和任务
 .\.venv\Scripts\python.exe commander\scripts\live_operator.py observe
-.\.venv\Scripts\python.exe commander\scripts\live_operator.py turn "抢中间偏西的油井"
-.\.venv\Scripts\python.exe commander\scripts\live_operator.py stop
+
+# 重新打印 MCP 客户端配置
+.\.venv\Scripts\python.exe commander\scripts\live_operator.py mcp-config
 ```
 
-`turn` is only a human smoke-test convenience.  A real Agent connects through
-`live_operator.py mcp` and uses the five semantic Phase 1c tools:
-`read_battlefield`, `get_alerts`, `read_missions`, `issue_mission`, and
-`cancel_mission`.  Run `mcp-config` after `start` to print a Claude/Codex MCP
-stdio configuration.  The single-session visible launcher intentionally does
-not promise fixed faction/spawn; use the multi-session CreateSession path for
-the canonical fixed profile.
+启动失败时，查看 `commander\evidence\live-operator.log`。
 
-Windows 上原版运行时、项目版可见游戏、实时控制链路、dashboard、noVNC/TightVNC
-以及各进程的检查和停止方法，见
-[`document/phase1d-operator-guide.md`](../document/phase1d-operator-guide.md)。
+## 当前边界
 
-## CLI Reference
-
-```
-openra-rl play       Run the LLM agent (wizard on first use)
-openra-rl config     Re-run the setup wizard
-openra-rl server     start | stop | status | logs
-openra-rl replay     watch | list | copy | stop
-openra-rl bench      submit   Upload results to the leaderboard
-openra-rl mcp-server Start MCP stdio server (for OpenClaw / Claude Desktop)
-openra-rl doctor     Check system prerequisites
-openra-rl version    Print version
-```
-
-## MCP Server (OpenClaw / Claude Desktop)
-
-OpenRA-RL exposes all 48 game tools as a standard MCP server:
-
-```bash
-openra-rl mcp-server
-```
-
-Add to your MCP client config (e.g. `~/.openclaw/openclaw.json`):
-
-```json
-{
-  "mcpServers": {
-    "openra-rl": {
-      "command": "openra-rl",
-      "args": ["mcp-server"]
-    }
-  }
-}
-```
-
-Then chat: _"Start a game of Red Alert on easy difficulty, build a base, and defeat the enemy."_
-
-## Architecture
-
-| Component | Language | Role |
-|-----------|----------|------|
-| **OpenRA-RL** | Python | Environment wrapper, agents, HTTP/WebSocket API |
-| **OpenRA** (submodule) | C# | Modified game engine with embedded gRPC server |
-| **OpenEnv** (pip dep) | Python | Standardized Gymnasium-style environment interface |
-
-**Data flow:** Agent <-> FastAPI (port 8000) <-> gRPC bridge (port 9999) <-> OpenRA game engine
-
-The game runs at ~25 ticks/sec independent of agent speed. Observations use a DropOldest channel so the agent always sees the latest game state, even if it's slower than real time.
-
-<details>
-<summary>Full architecture diagram</summary>
-
-<p align="center">
-  <img src="docs/architecture.png" alt="OpenRA-RL System Architecture" width="800">
-</p>
-
-</details>
-
-## Example Agents
-
-### Scripted Bot
-
-A hardcoded state-machine bot that demonstrates all action types. Deploys MCV, builds a base, trains infantry, and attacks.
-
-```bash
-python examples/scripted_bot.py --url http://localhost:8000 --verbose --max-steps 2000
-```
-
-### MCP Bot
-
-A planning-aware bot that uses game knowledge tools (tech tree lookups, faction briefings, map analysis) to formulate strategy before playing.
-
-```bash
-python examples/mcp_bot.py --url http://localhost:8000 --verbose --max-turns 3000
-```
-
-### LLM Agent
-
-An AI agent powered by any OpenAI-compatible model. Supports cloud APIs (OpenRouter, OpenAI) and local model servers (Ollama, LM Studio).
-
-```bash
-python examples/llm_agent.py \
-  --config examples/config-openrouter.yaml \
-  --api-key sk-or-... \
-  --verbose \
-  --log-file game.log
-```
-
-CLI flags override config file values. See `python examples/llm_agent.py --help` for all options.
-
-## Configuration
-
-OpenRA-RL uses a unified YAML config system. Settings are resolved with this precedence:
-
-**CLI flags > Environment variables > Config file > Built-in defaults**
-
-### Config file
-
-Copy and edit the default config:
-
-```bash
-cp config.yaml my-config.yaml
-# Edit my-config.yaml, then:
-python examples/llm_agent.py --config my-config.yaml
-```
-
-Key sections:
-
-```yaml
-game:
-  openra_path: "/opt/openra"      # Path to OpenRA installation
-  map_name: "singles.oramap"      # Map to play
-  headless: true                  # No GPU rendering
-  record_replays: false           # Save .orarep replay files
-
-opponent:
-  bot_type: "normal"              # AI difficulty: easy, normal, hard
-  ai_slot: "Multi0"              # AI player slot
-
-planning:
-  enabled: true                   # Pre-game planning phase
-  max_turns: 10                   # Max planning turns
-  max_time_s: 60.0                # Planning time limit
-
-llm:
-  base_url: "https://openrouter.ai/api/v1/chat/completions"
-  model: "qwen/qwen3-coder-next"
-  max_tokens: 1500
-  temperature: null               # null = provider default
-
-tools:
-  categories:                     # Toggle tool groups on/off
-    read: true
-    knowledge: true
-    movement: true
-    production: true
-    # ... see config.yaml for all categories
-  disabled: []                    # Disable specific tools by name
-
-alerts:
-  under_attack: true
-  low_power: true
-  idle_production: true
-  no_scouting: true
-  # ... see config.yaml for all alerts
-```
-
-### Example configs
-
-| File | Use case |
-|------|----------|
-| `examples/config-openrouter.yaml` | Cloud LLM via OpenRouter (Claude, GPT, etc.) |
-| `examples/config-ollama.yaml` | Local LLM via Ollama |
-| `examples/config-lmstudio.yaml` | Local LLM via LM Studio |
-| `examples/config-minimal.yaml` | Reduced tool set for limited-context models |
-
-### Environment variables
-
-| Variable | Config path | Description |
-|----------|-------------|-------------|
-| `OPENROUTER_API_KEY` | `llm.api_key` | API key for OpenRouter |
-| `LLM_API_KEY` | `llm.api_key` | Generic LLM API key (overrides OpenRouter key) |
-| `LLM_BASE_URL` | `llm.base_url` | LLM endpoint URL |
-| `LLM_MODEL` | `llm.model` | Model identifier |
-| `BOT_TYPE` | `opponent.bot_type` | AI difficulty: easy, normal, hard |
-| `OPENRA_PATH` | `game.openra_path` | Path to OpenRA installation |
-| `RECORD_REPLAYS` | `game.record_replays` | Save replay files (true/false) |
-| `PLANNING_ENABLED` | `planning.enabled` | Enable planning phase (true/false) |
-
-## Using Local Models
-
-### Ollama
-
-```bash
-# Pull a model with tool-calling support
-ollama pull qwen3:32b
-
-# For models that need more context (default is often 2048-4096 tokens):
-cat > /tmp/Modelfile <<EOF
-FROM qwen3:32b
-PARAMETER num_ctx 32768
-EOF
-ollama create qwen3-32k -f /tmp/Modelfile
-
-# Run
-openra-rl play --provider ollama --model qwen3-32k
-```
-
-> **Note:** Not all Ollama models support tool calling. Check with `ollama show <model>` — the template must include a `tools` block. Models known to work: `qwen3:32b`, `qwen3:4b`.
-
-### LM Studio
-
-1. Load a model in LM Studio and start the local server (default port 1234)
-2. Run:
-
-```bash
-openra-rl play --provider lmstudio --model <model-name>
-```
-
-## Docker
-
-### Server management
-
-```bash
-openra-rl server start              # Start game server container
-openra-rl server start --port 9000  # Custom port
-openra-rl server status             # Check if running
-openra-rl server logs --follow      # Tail logs
-openra-rl server stop               # Stop container
-```
-
-### Docker Compose (development)
-
-| Service | Command | Description |
-|---------|---------|-------------|
-| `openra-rl` | `docker compose up openra-rl` | Headless game server (ports 8000, 9999) |
-| `agent` | `docker compose up agent` | LLM agent (requires `OPENROUTER_API_KEY`) |
-| `mcp-bot` | `docker compose run mcp-bot` | MCP bot |
-
-```bash
-# LLM agent via Docker Compose
-OPENROUTER_API_KEY=sk-or-... docker compose up agent
-```
-
-### Replays
-
-After each game, replays are automatically copied to `~/.openra-rl/replays/`. Watch them in your browser:
-
-```bash
-openra-rl replay watch              # Watch the latest replay (opens browser via VNC)
-openra-rl replay watch <file>       # Watch a specific .orarep file
-openra-rl replay list               # List replays (Docker + local)
-openra-rl replay copy               # Copy replays from Docker to local
-openra-rl replay stop               # Stop the replay viewer
-```
-
-The replay viewer runs inside Docker using the same engine that recorded the game, so replays always play back correctly. The browser connects via noVNC — no local game install needed.
-
-> **Version tracking:** Each replay records which Docker image version was used. When you upgrade, old replays are still viewable using their original engine version.
-
-## Local Development (without Docker)
-
-For running the game server natively (macOS/Linux):
-
-### 1. Clone with submodules
-
-`OpenRA/` is a git submodule — clone it alongside the repo:
-
-```bash
-git clone --recurse-submodules https://github.com/yxc20089/OpenRA-RL.git
-```
-
-Or if you already cloned without submodules:
-
-```bash
-git submodule update --init --recursive
-```
-
-### 2. Install Python dependencies
-
-#### 2.1 Create a virtual environment
-
-Create and activate a dedicated environment (Python 3.10 recommended):
-
-**Conda:**
-```bash
-conda create --name openra python=3.10
-conda activate openra
-```
-
-**venv:**
-```bash
-python3.10 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-```
-
-#### 2.2 Install dependencies
-
-```bash
-pip install -e ".[dev]"
-```
-
-### 3. Install .NET 8 SDK
-
-**macOS (Apple Silicon):**
-```bash
-brew install dotnet@8
-echo 'export PATH="/opt/homebrew/opt/dotnet@8/bin:$PATH"' >> ~/.profile
-source ~/.profile
-```
-
-**macOS (Intel):** same, but replace `/opt/homebrew` with `/usr/local`.
-
-**Ubuntu/Debian:**
-```bash
-sudo apt install dotnet-sdk-8.0
-```
-
-**Other Linux:** see https://learn.microsoft.com/dotnet/core/install/linux
-
-### 4. Install native libraries
-
-**macOS:**
-```bash
-brew install sdl2 openal-soft freetype luajit
-```
-
-**Ubuntu/Debian:**
-```bash
-sudo apt install libsdl2-dev libopenal-dev libfreetype-dev libluajit-5.1-dev
-```
-
-### 5. Build OpenRA
-
-```bash
-cd OpenRA && make && cd ..
-```
-
-> **Known build issue (macOS + .NET 8):** If you see `error CS0121: The call is ambiguous` for `CryptoUtil.SHA1Hash` in `OpenRA.Game/Map/Map.cs`, change line 286 from:
-> ```csharp
-> return CryptoUtil.SHA1Hash([]);
-> ```
-> to:
-> ```csharp
-> return CryptoUtil.SHA1Hash(Array.Empty<byte>());
-> ```
-> Then re-run `make`.
-
-### 6. Copy native libraries into OpenRA/bin/ (macOS only)
-
-```bash
-cp $(brew --prefix sdl2)/lib/libSDL2.dylib OpenRA/bin/SDL2.dylib
-cp $(brew --prefix openal-soft)/lib/libopenal.dylib OpenRA/bin/soft_oal.dylib
-cp $(brew --prefix freetype)/lib/libfreetype.dylib OpenRA/bin/freetype6.dylib
-cp $(brew --prefix luajit)/lib/libluajit-5.1.dylib OpenRA/bin/lua51.dylib
-```
-
-On Linux this step is not needed.
-
-### 7. Configure config.yaml
-
-Set `game.openra_path` to the absolute path of the `OpenRA/` directory:
-
-```yaml
-game:
-  openra_path: "/path/to/OpenRA-RL/OpenRA"  # use $(pwd)/OpenRA
-  headless: true   # true = no window, runs anywhere (recommended for agents)
-                   # false = opens a real OpenRA window so you can watch live
-```
-
-Use `headless: true` for agent training and CI. Use `headless: false` only if you want to watch the game in a live OpenRA window (requires a display and SDL2).
-
-### 8. Run the agent
-
-```bash
-openra-rl play --local --provider ollama --model qwen3:32b
-```
-
-### Start the server manually (optional)
-
-```bash
-python openra_env/server/app.py
-```
-
-### Run tests
-
-```bash
-pytest
-```
-
-## Observation Space
-
-Each tick, the agent receives structured game state:
-
-| Field | Description |
-|-------|-------------|
-| `tick` | Current game tick |
-| `cash`, `ore`, `power_provided`, `power_drained` | Economy |
-| `units` | Own units with position, health, type, facing, stance, speed, attack range |
-| `buildings` | Own buildings with production queues, power, rally points |
-| `visible_enemies`, `visible_enemy_buildings` | Fog-of-war limited enemy intel |
-| `spatial_map` | 9-channel spatial tensor (terrain, height, resources, passability, fog, own buildings, own units, enemy buildings, enemy units) |
-| `military` | Kill/death costs, asset value, experience, order count |
-| `available_production` | What can currently be built |
-
-## Action Space
-
-18 action types available through the command API:
-
-| Category | Actions |
-|----------|---------|
-| **Movement** | `move`, `attack_move`, `attack`, `stop` |
-| **Production** | `produce`, `cancel_production` |
-| **Building** | `place_building`, `sell`, `repair`, `power_down`, `set_rally_point`, `set_primary` |
-| **Unit control** | `deploy`, `guard`, `set_stance`, `enter_transport`, `unload`, `harvest` |
-
-## MCP Tools
-
-The LLM agent interacts through 48 MCP (Model Context Protocol) tools organized into categories:
-
-| Category | Tools | Purpose |
-|----------|-------|---------|
-| **Read** | `get_game_state`, `get_economy`, `get_units`, `get_buildings`, `get_enemies`, `get_production`, `get_map_info`, `get_exploration_status` | Query current game state |
-| **Knowledge** | `lookup_unit`, `lookup_building`, `lookup_tech_tree`, `lookup_faction` | Static game data reference |
-| **Bulk Knowledge** | `get_faction_briefing`, `get_map_analysis`, `batch_lookup` | Efficient batch queries |
-| **Planning** | `start_planning_phase`, `end_planning_phase`, `get_opponent_intel`, `get_planning_status` | Pre-game strategy planning |
-| **Game Control** | `advance` | Advance game ticks |
-| **Movement** | `move_units`, `attack_move`, `attack_target`, `stop_units` | Unit movement commands |
-| **Production** | `build_unit`, `build_structure`, `build_and_place` | Build units and structures |
-| **Building Actions** | `place_building`, `cancel_production`, `deploy_unit`, `sell_building`, `repair_building`, `set_rally_point`, `guard_target`, `set_stance`, `harvest`, `power_down`, `set_primary` | Building and unit management |
-| **Placement** | `get_valid_placements` | Query valid building locations |
-| **Unit Groups** | `assign_group`, `add_to_group`, `get_groups`, `command_group` | Group management |
-| **Compound** | `batch`, `plan` | Multi-action sequences |
-| **Utility** | `get_replay_path`, `surrender` | Misc |
-| **Terrain** | `get_terrain_at` | Terrain queries |
-
-Tools can be toggled per-category or individually via `config.yaml`.
-
-## Benchmark & Leaderboard
-
-Game results are automatically submitted to the [OpenRA-Bench leaderboard](https://huggingface.co/spaces/openra-rl/OpenRA-Bench) after each game. Disable with `BENCH_UPLOAD=false` or `bench_upload: false` in config.
-
-### Agent identity
-
-Customize how your agent appears on the leaderboard:
-
-```bash
-# Environment variables
-AGENT_NAME="DeathBot-9000" AGENT_TYPE="RL" openra-rl play
-
-# Or in config.yaml
-agent:
-  agent_name: "DeathBot-9000"
-  agent_type: "RL"
-  agent_url: "https://github.com/user/deathbot"  # shown as link on leaderboard
-```
-
-| Variable | Config path | Description |
-|----------|-------------|-------------|
-| `AGENT_NAME` | `agent.agent_name` | Display name (default: model name) |
-| `AGENT_TYPE` | `agent.agent_type` | Scripted / LLM / RL (default: auto-detect) |
-| `AGENT_URL` | `agent.agent_url` | GitHub/project URL shown on leaderboard |
-| `BENCH_UPLOAD` | `agent.bench_upload` | Auto-upload after each game (default: true) |
-| `BENCH_URL` | `agent.bench_url` | Leaderboard URL |
-
-### Manual submission
-
-Upload a saved result (with optional replay file):
-
-```bash
-openra-rl bench submit result.json
-openra-rl bench submit result.json --replay game.orarep --agent-name "MyBot"
-```
-
-### Custom agents
-
-If you're building your own agent (RL, CNN, multi-agent, etc.) that doesn't use the built-in LLM agent, use `build_bench_export()` to create a leaderboard submission from a final observation:
-
-```python
-from openra_env.bench_export import build_bench_export
-
-# obs = final observation from env.step()
-export = build_bench_export(
-    obs,
-    agent_name="DeathBot-9000",
-    agent_type="RL",
-    opponent="Normal",
-    agent_url="https://github.com/user/deathbot",
-    replay_path="/path/to/replay.orarep",
-)
-# Saves JSON to ~/.openra-rl/bench-exports/ and returns dict with "path" key
-```
-
-Then submit:
-
-```bash
-openra-rl bench submit ~/.openra-rl/bench-exports/bench-DeathBot-9000-*.json --replay game.orarep
-```
-
-## Project Structure
-
-```
-OpenRA-RL/
-├── OpenRA/                     # Game engine (git submodule, C#)
-├── openra_env/                 # Python package
-│   ├── cli/                    #   CLI entry point (openra-rl command)
-│   ├── mcp_server.py           #   Standard MCP server (stdio transport)
-│   ├── client.py               #   WebSocket client
-│   ├── config.py               #   Unified YAML configuration
-│   ├── models.py               #   Pydantic data models
-│   ├── game_data.py            #   Unit/building stats, tech tree
-│   ├── reward.py               #   Multi-component reward function
-│   ├── bench_export.py         #   Build leaderboard submissions from observations
-│   ├── bench_submit.py         #   Upload results to OpenRA-Bench leaderboard
-│   ├── opponent_intel.py       #   AI opponent profiles
-│   ├── mcp_ws_client.py        #   MCP WebSocket client
-│   ├── server/
-│   │   ├── app.py              #     FastAPI application
-│   │   ├── openra_environment.py  #  OpenEnv environment (reset/step/state)
-│   │   ├── bridge_client.py    #     Async gRPC client
-│   │   └── openra_process.py   #     OpenRA subprocess manager
-│   └── generated/              #   Auto-generated protobuf stubs
-├── examples/
-│   ├── scripted_bot.py         #   Hardcoded strategy bot
-│   ├── mcp_bot.py              #   MCP tool-based bot
-│   ├── llm_agent.py            #   LLM-powered agent
-│   └── config-*.yaml           #   Example configs (ollama, lmstudio, openrouter, minimal)
-├── skill/                      # OpenClaw skill definition
-├── proto/                      # Protobuf definitions (rl_bridge.proto)
-├── tests/                      # Test suite
-├── .github/workflows/          # CI, Docker publish, PyPI publish
-├── config.yaml                 # Default configuration
-├── docker-compose.yaml         # Service orchestration
-├── Dockerfile                  # Game server image
-└── Dockerfile.agent            # Lightweight agent image
-```
-
-## Ecosystem
-
-| Repository | Description |
-|------------|-------------|
-| [OpenRA-RL](https://github.com/yxc20089/OpenRA-RL) | Python environment, agents, MCP server (this repo) |
-| [OpenRA](https://github.com/yxc20089/OpenRA) | Modified C# game engine with gRPC bridge |
-| [OpenRA-Bench](https://github.com/yxc20089/OpenRA-Bench) | Leaderboard & benchmark ([live](https://huggingface.co/spaces/openra-rl/OpenRA-Bench)) |
-| [OpenRA-RL-Util](https://github.com/yxc20089/OpenRA-RL-Util) | Shared utilities — reward vectors, damage matrices, rubrics |
-| [OpenRA-RL-Training](https://github.com/yxc20089/OpenRA-RL-Training) | Scenario system, curriculum, GRPO training engine |
-| [OpenRA-RL-Website](https://github.com/yxc20089/OpenRA-RL-Website) | Documentation site ([openra-rl.dev](https://openra-rl.dev)) |
-| [OpenEnv](https://github.com/OpenEnvs/OpenEnv) | Gymnasium-style environment framework |
-
-## License
-
-[GPL-3.0](LICENSE)
+- 当前发布目标是 RA1，不包含 RA2。
+- AI 下达的是高层战术任务，不直接控制每一个单位的每一步移动。
+- 默认单局启动不保证固定阵营与出生点；固定配置用于自动化验收。
+- 可见窗口需要交互式 Windows 桌面；自动化测试可使用 `-Headless`。

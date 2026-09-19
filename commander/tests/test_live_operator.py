@@ -43,6 +43,36 @@ def test_metadata_writer_is_atomic_and_json():
         assert not list(Path(temp).glob("*.tmp"))
 
 
+def test_status_does_not_write_supervisor_metadata():
+    live = _module()
+    metadata = {"schema_version": 1, "status": "playing"}
+    output = []
+
+    class State:
+        phase = "playing"
+        tick = 25
+        player_faction = "england"
+        enemy_faction = "ukraine"
+        player_spawn = 1
+        enemy_spawn = 2
+
+    class Bridge:
+        def get_state(self):
+            return State()
+
+        def close(self):
+            pass
+
+    live._metadata_or_die = lambda: dict(metadata)
+    live._facade = lambda _: (object(), Bridge())
+    live._print_json = output.append
+    live._write_json = lambda *_: (_ for _ in ()).throw(AssertionError("status must not write metadata"))
+
+    assert live._status(None) == 0
+    assert output[0]["tick"] == 25
+    assert output[0]["status"] == "playing"
+
+
 def test_safe_runtime_root_rejects_outside_workspace():
     live = _module()
     with tempfile.TemporaryDirectory() as temp:
@@ -58,5 +88,6 @@ def test_safe_runtime_root_rejects_outside_workspace():
 if __name__ == "__main__":
     test_natural_language_smoke_maps_to_semantic_missions()
     test_metadata_writer_is_atomic_and_json()
+    test_status_does_not_write_supervisor_metadata()
     test_safe_runtime_root_rejects_outside_workspace()
-    print("test_live_operator: 3 passed")
+    print("test_live_operator: 4 passed")
